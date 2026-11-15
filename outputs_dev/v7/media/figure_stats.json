@@ -1,0 +1,23 @@
+{
+  "Calculator": {
+    "possessions": 1069,
+    "interception": 316,
+    "drop": 280,
+    "score": 473,
+    "tight": 20987,
+    "switch": 208,
+    "poach": 624,
+    "double": 786,
+    "trail": 163
+  },
+  "Scripted": {
+    "possessions": 342,
+    "interception": 170,
+    "drop": 99,
+    "score": 73,
+    "double": 1111,
+    "tight": 3916,
+    "switch": 186,
+    "poach": 838
+  }
+}

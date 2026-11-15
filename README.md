@@ -115,3 +115,28 @@ full-game baselines. The default uses eight representatives per base state;
 pickle files; rebuild when implementation or configuration changes. The sampled
 abstraction omits exact player positions and mark identities, so solving it does
 not establish guarantees for the concrete game.
+
+### Full-game media
+
+```sh
+uv run python render_full.py outputs_dev/v7/Calculator_vs_Scripted_games.json --game-index 0
+uv run python render_full.py outputs_dev/v7/Calculator_vs_Scripted_games.json --game-index 0 --highlights 12
+uv run python render_full.py outputs_dev/v7/Calculator_vs_Scripted_games.json outputs_dev/v7/Calculator_vs_Calculator_games.json --figures
+```
+
+Media defaults to `outputs_dev/v7/media/`. `--figures --video` makes both.
+Indices are zero-based across the supplied files. Highlights retain complete
+possessions with at most N side turns, including every score/drop/interception
+in those possessions; longer possessions are omitted. Playback is shortened
+to at most 84 seconds; lower N if more than 1,008 turns qualify. Full replays
+retain every turn at half a second per turn. Coordinate rotation is announced
+in the header; blue/red always refer to team 0/team 1.
+
+Histories omit tactic names. Baseline modes are reconstructed without a solver:
+Scripted's deterministic rules, Calculator's first matching joint action.
+Identical realized positions and marks have identical continuation value, so
+Calculator's first-minimum tie break identifies the selected matching action.
+Switches are separate assignment-change counts (overlap positioning modes).
+For LLM histories, tactic modes are reported as unknown: positions alone cannot
+recover its intended action. Figures pool supplied games, including both teams
+in self-play; PPP denominators are completed possessions.
