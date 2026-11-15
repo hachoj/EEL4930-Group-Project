@@ -65,3 +65,53 @@ Lane cells are x=0–2, 3–6, 7–9 (3/4/3); depth bands remain y=0–4, 5–9,
 Every action applies all player proposals before resolving collisions, and replay interpolation updates entire team arrays at the same fraction. Calculator uses the complete Cartesian product of its receiver intents and defender positioning modes (see above). LLM named fields independently choose both receiver/all defender moves. Scripted now independently selects open-space cuts with forward progress rather than repeatedly walking into a fixed marker. `movement_report.py` compares identity-aligned recorded moves (including post-catch relabeling).
 
 Measured joint-action results and remaining abstraction limits: `VALIDATION_V5.md`. Reproduce with `uv run python ultimate.py --n 30 --no-llm --samples 30 --out outputs_dev/v5`. No rule, start, catch-curve or Scripted policy changes were made in v5.
+
+## v7: full games (v1 preserved)
+
+Use `full_game.py` for v7; `ultimate.py --single-possession` retains the v1 rules,
+solver and outputs. v7 runs go in `outputs_dev/v7/` by default. No LLM is used
+unless a team is explicitly `LLM`. Each team uses its coach on both sides.
+
+```sh
+uv run python -m unittest -v
+uv run python full_game.py --team0 Calculator --team1 Scripted --n 20 --jobs 2
+uv run python full_game.py --team0 Calculator --team1 Calculator --n 20 --jobs 2
+# Owner runs this (not run during implementation):
+uv run python full_game.py --team0 LLM --team1 Calculator --n 10 --jobs 4 --model haiku
+```
+
+`--max-hold 3` counts offensive decisions since gaining the disc. The third
+must throw; successful catches reset the counter. `--max-hold 5 --rebuild`
+changes the rule and rebuilds its explicit counter states. There are **no
+stall turnovers**. `--safety-cap 20000` is a game-level bug guard; an interrupted
+game has `finished=false` and `safety_cap_triggered=true`, never a fabricated
+winner or turnover. Games alternate which team receives first. Final histories,
+per-possession throw/score stats and summaries are saved under matchup-specific
+names. The runner uses separate processes; decisions and LLM requests within
+each game are sequential. LLM answers are cached by model and complete prompt;
+malformed replies retry once, then use the legal Scripted move. CLI failures
+propagate instead of silently impersonating an LLM. `--model haiku|opus` remains.
+
+The v7 Calculator has 300 offense actions and **1,372 defense actions**: seven
+independent positioning modes for each defender, for each of four mark
+permutations (no switch or any one of the three reciprocal pair switches).
+Modes are tight-front, tight-behind, trail, poach-lane, poach-deep, double-B,
+double-C. No combinations are pruned. Movement and reservations remain one
+square; switches change assignments rather than teleporting players. The
+force-flick seal after catches retains v1's explicit teleport exception.
+
+Turnovers rotate all players by 180 degrees and exchange teams, placing the new
+holder at the receiver for drops or at the blocking defender for interceptions.
+If the old receiver occupies that pickup spot it moves to the nearest vacant
+square; this explicit administrative exception prevents cross-team overlap.
+After scores the other team starts in rows 0–2. Coordinates always attack +y.
+
+v7 adds a modest lane hazard to the unchanged UFA/receiver-pressure curve.
+The new discounted Calculator values scoring and the opponent's next possession;
+it is solved to a measured Bellman residual, rather than the v1 30-turn horizon.
+`VALIDATION_V7.md` describes the math, restart approximation, timings and measured
+full-game baselines. The default uses eight representatives per base state;
+`--samples 30 --rebuild` increases transition sampling. Caches are trusted local
+pickle files; rebuild when implementation or configuration changes. The sampled
+abstraction omits exact player positions and mark identities, so solving it does
+not establish guarantees for the concrete game.

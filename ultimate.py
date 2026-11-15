@@ -244,7 +244,7 @@ def render(games,rows):
     render_replays(games,OUT,show_marks=SHOW_MARKS)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--break-multiplier',type=float,default=1.0);p.add_argument('--n',type=int,default=3);p.add_argument('--model',default='haiku');p.add_argument('--no-llm',action='store_true');p.add_argument('--samples',type=int,default=30);p.add_argument('--start-depth',type=int,choices=range(0,15),default=12);p.add_argument('--out',type=Path,default=Path('outputs_dev'));p.add_argument('--hide-marks',action='store_true');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--single-possession',action='store_true',help='Explicitly select the legacy v1 experiment (also the default for this entry point)');p.add_argument('--break-multiplier',type=float,default=1.0);p.add_argument('--n',type=int,default=3);p.add_argument('--model',default='haiku');p.add_argument('--no-llm',action='store_true');p.add_argument('--samples',type=int,default=30);p.add_argument('--start-depth',type=int,choices=range(0,15),default=12);p.add_argument('--out',type=Path,default=Path('outputs_dev'));p.add_argument('--hide-marks',action='store_true');args=p.parse_args()
     global OUT, START_DEPTH, SHOW_MARKS
     force.BREAK_MULTIPLIER=args.break_multiplier
     SHOW_MARKS=not args.hide_marks
