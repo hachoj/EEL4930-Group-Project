@@ -44,10 +44,11 @@ def pitch(ax,h,g,previous=None,alpha=1,show_marks=True,abstract=False):
     for team,labels,color,marker in ((o,['A','B','C'],'#247de0','s'),(d,['D1','D2','D3'],'#e45a43','h')):
         ax.scatter(team[:,1],team[:,0],s=240,c=color,marker=marker,edgecolor='white',lw=1.2,zorder=5)
         for pos,label in zip(team,labels):ax.text(pos[1],pos[0],label,ha='center',va='center',color='white',fontsize=8,weight='bold',zorder=6)
+    marker=d[marks.index(0)];ax.scatter(marker[1],marker[0],s=360,facecolors='none',edgecolors='#ffdf58',lw=2,zorder=7)
     disc=h['thrower'];ax.add_patch(Circle((disc[1]+.17,disc[0]-.17),.17,color='black',alpha=.4,zorder=7));ax.add_patch(Circle((disc[1],disc[0]),.15,color='white',ec='#bbb',zorder=8))
     if h['receiver']:
         a=h['thrower'];b=h['receiver'];ax.add_patch(FancyArrowPatch((a[1],a[0]),(b[1],b[0]),connectionstyle='arc3,rad=.25',arrowstyle='->',mutation_scale=16,color='#ffe569',lw=2,zorder=9))
-        ax.text((a[1]+b[1])/2,(a[0]+b[0])/2+1,f"p={h['p']:.3f} · {h.get('throw_result','').upper()}",color='white',ha='center',bbox=dict(facecolor='#182c29',alpha=.9),zorder=10)
+        ax.text((a[1]+b[1])/2,(a[0]+b[0])/2+1,f"p={h['p']:.3f} · {h.get('throw_result','').upper()} {'BREAK' if h.get('break_throw') else 'OPEN'}",color='white',ha='center',bbox=dict(facecolor='#182c29',alpha=.9),zorder=10)
     ax.set_title(f"BLUE {g['offense']} offense   |   RED {g['defense']} defense   |   Turn {h['turn']}   |   {h.get('_outcome','PLAYING')}",fontsize=10,color='#173628',weight='bold')
 
 def render_replays(games,out,show_marks=True):

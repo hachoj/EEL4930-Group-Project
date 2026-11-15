@@ -5,6 +5,7 @@ import numpy as np
 OUT=Path('outputs_dev')
 START_DEPTH=12
 SHOW_MARKS=True
+import force
 DELTAS=list(itertools.product((-1,0,1),repeat=2))
 KEYS=list(itertools.product(range(15),range(15),range(15),range(3),range(3)))
 INDEX={k:i for i,k in enumerate(KEYS)}
@@ -12,7 +13,8 @@ INDEX={k:i for i,k in enumerate(KEYS)}
 def lane(x): return 0 if x<3 else 1 if x<7 else 2
 def zone(p): return lane(p[0])+3*(p[1]//5 if p[1]<15 else 3 if p[1]<17 else 4)
 def catch(o,d,r):
-    a=np.array(o[0],float)-o[r]; dist=float(np.linalg.norm(a)); p=1/(1+math.exp((dist*5-60)/20))
+    a=np.array(o[0],float)-o[r]; dist=float(np.linalg.norm(a)); p=1/(1+math.exp(-(4.15701518-.06417449*dist*5)))
+    if force.is_break(o[0],o[r]):p*=force.BREAK_MULTIPLIER
     for q in d:
         b=np.array(q,float)-o[r]; n=float(np.linalg.norm(b)); cos=float(a@b)/(dist*n) if dist*n else 1.0
         p*=1-.6*max(0,1-n/3)*(.25+.75*(1+cos)/2)
@@ -43,6 +45,7 @@ def start_positions(seed,depth=None):
     b=START_DEPTH if depth is None else depth
     o=[[2,b],[5,b+1],[8,b+2]]
     d=[[p[0],p[1]+rng.choice((1,2))] for p in o]
+    d=force.seal(o,d,assign_marks(o,d))
     return o,d
 
 def assign_marks(o,d):
@@ -73,7 +76,9 @@ def outcomes(o,d,side,a,marks=None):
     if not r:return [(1.,INDEX[key(x,y)])]
     p=catch(x,y,r)
     if x[r][1]>=17:return [(p,-1),(1-p,-2)]
+    mm=assign_marks(x,y) if marks is None else marks
     x[0],x[r]=x[r],x[0]
+    y=force.seal(x,y,[r if m==0 else 0 if m==r else m for m in mm])
     return [(p,INDEX[key(x,y)]),(1-p,-2)]
 
 def far_point(o,rng):
@@ -121,6 +126,7 @@ def llm(o,d,side,t,model,marks=None):
     schema={'move_B':'N','move_C':'NE','action':'hold'} if side==0 else {'move_D1':'N','move_D2':'stay','move_D3':'SW'}
     prompt=json.dumps({'task':'Ultimate: maximize probability of an endzone catch as offense; minimize it as defense. Return only JSON with named fields, following the example schema.',
         'rules':'Field x=0..9, y=0..19. N increases y. Endzone y>=17. A holds disc and cannot move. Move receivers first, then hold or throw_B or throw_C. HOLD IS SAFE: receivers move without risking possession. A dropped throw immediately LOSES. Repeated sideways/backward throws multiply turnover risk; optimize scoring, not completion count. Defense moves all defenders. No two players may occupy one square; choose jointly compatible moves. Turns alternate and each side move consumes one remaining turn. A catch only wins if in the endzone.',
+        'force_rule':f'After catches the holder marker seals left (negative x). Throws more than 15 degrees toward left are break throws; probabilities include assumed multiplier {force.BREAK_MULTIPLIER}.',
         'side':'offense' if side==0 else 'defense','turns_left':t,'field':field,'distances_to_defenders':proximity,
         'throw_distances':{label:round(math.dist(o[0],o[j]),2) for label,j in [('B',1),('C',2)]},
         'current_p_catch':{label:round(catch(o,d,j),4) for label,j in [('B',1),('C',2)]},
@@ -185,8 +191,12 @@ def choose(name,o,d,side,t,solver,model,marks=None):
     if r and x[r][1]>=17:value=p
     else:
         nxt=[p[:] for p in x]
-        if r:nxt[0],nxt[r]=nxt[r],nxt[0]
-        value=p*solver.V[t-1,1-side,INDEX[key(nxt,y)]]
+        if r:
+            nxt[0],nxt[r]=nxt[r],nxt[0]
+            mm=assign_marks(x,y) if marks is None else marks
+            y_next=force.seal(nxt,y,[r if m==0 else 0 if m==r else m for m in mm])
+        else:y_next=y
+        value=p*solver.V[t-1,1-side,INDEX[key(nxt,y_next)]]
     opt=float(max(qs) if side==0 else min(qs)); regret=max(0.,opt-value if side==0 else value-opt)
     return x,y,r,p,regret
 
@@ -196,7 +206,7 @@ def game(off,deff,seed,solver,model):
     for turn in range(30):
         side=turn%2; x,y,r,p,regret=choose(off if side==0 else deff,o,d,side,30-turn,solver,model,marks)
         alternatives=solver.qs(o,d,side,30-turn).tolist()
-        record={'marks':marks[:],'mark_distance':float(np.mean([math.dist(y[j],x[m]) for j,m in enumerate(marks)])),'abstract_alternatives':alternatives,'abstract_state':list(key(o,d)),'o':[v[:] for v in x],'d':[v[:] for v in y],'thrower':o[0],'receiver':x[r] if r else None,'p':p,'turn':turn+1,'side':side,'regret':regret}; history.append(record); regrets.append(regret)
+        record={'marks':marks[:],'mark_distance':float(np.mean([math.dist(y[j],x[m]) for j,m in enumerate(marks)])),'abstract_alternatives':alternatives,'abstract_state':list(key(o,d)),'o':[v[:] for v in x],'d':[v[:] for v in y],'break_throw':bool(force.is_break(o[0],x[r])) if r else False,'holder_marker':marks.index(0),'thrower':o[0],'receiver':x[r] if r else None,'p':p,'turn':turn+1,'side':side,'regret':regret}; history.append(record); regrets.append(regret)
         o,d=x,y
         if r:
             if rng.random()>p:history[-1]['throw_result']='dropped';outcome='turnover'; break
@@ -204,6 +214,7 @@ def game(off,deff,seed,solver,model):
             if o[r][1]>=17:outcome='score'; break
             o[0],o[r]=o[r],o[0]
             marks=[r if m==0 else 0 if m==r else m for m in marks]
+            d=force.seal(o,d,marks)
     return {'offense':off,'defense':deff,'seed':seed,'outcome':outcome,'turns':len(history),'predicted':pred,'mistake_rate':float(np.mean(np.array(regrets)>.02)),'mean_regret':float(np.mean(regrets)),'history':history}
 
 def wilson(k,n):
@@ -233,8 +244,9 @@ def render(games,rows):
     render_replays(games,OUT,show_marks=SHOW_MARKS)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--n',type=int,default=3);p.add_argument('--model',default='haiku');p.add_argument('--no-llm',action='store_true');p.add_argument('--samples',type=int,default=30);p.add_argument('--start-depth',type=int,choices=range(0,15),default=12);p.add_argument('--out',type=Path,default=Path('outputs_dev'));p.add_argument('--hide-marks',action='store_true');args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--break-multiplier',type=float,default=1.0);p.add_argument('--n',type=int,default=3);p.add_argument('--model',default='haiku');p.add_argument('--no-llm',action='store_true');p.add_argument('--samples',type=int,default=30);p.add_argument('--start-depth',type=int,choices=range(0,15),default=12);p.add_argument('--out',type=Path,default=Path('outputs_dev'));p.add_argument('--hide-marks',action='store_true');args=p.parse_args()
     global OUT, START_DEPTH, SHOW_MARKS
+    force.BREAK_MULTIPLIER=args.break_multiplier
     SHOW_MARKS=not args.hide_marks
     START_DEPTH=args.start_depth
     OUT=args.out;OUT.mkdir(parents=True,exist_ok=True)
@@ -248,5 +260,5 @@ def main():
         w=csv.DictWriter(f,fieldnames=[k for k in games[0] if k!='history']);w.writeheader();w.writerows({k:v for k,v in g.items() if k!='history'} for g in games)
     print(json.dumps(rows,indent=2),flush=True); print('Offense | Defense | N | Win | Win 95% CI | Turnover | Turnover 95% CI | Mistake | Gap',flush=True)
     for row in rows: print(' | '.join(str(row[k]) for k in ('offense','defense','n','win_rate','win_ci','turnover_rate','turnover_ci','mistake_rate','abstraction_gap')),flush=True)
-    render(games,rows);(OUT/'run.json').write_text(json.dumps({'model':args.model,'llm_enabled':not args.no_llm,'n':args.n,'start_depth':START_DEPTH,'reported_model_ids':sorted(MODEL_IDS),'wall_seconds':time.monotonic()-start},indent=2))
+    render(games,rows);(OUT/'run.json').write_text(json.dumps({'break_multiplier':force.BREAK_MULTIPLIER,'model':args.model,'llm_enabled':not args.no_llm,'n':args.n,'start_depth':START_DEPTH,'reported_model_ids':sorted(MODEL_IDS),'wall_seconds':time.monotonic()-start},indent=2))
 if __name__=='__main__':main()

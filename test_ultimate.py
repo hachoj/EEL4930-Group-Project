@@ -3,7 +3,7 @@ import ultimate as u
 class Rules(unittest.TestCase):
  def test_distance(self):
   o=[[0,0],[0,4],[9,19]]; d=[[9,19]]*3
-  self.assertAlmostEqual(u.catch(o,d,1),1/(1+math.exp((20-60)/20)))
+  self.assertAlmostEqual(u.catch(o,d,1),1/(1+math.exp(-(4.15701518-.06417449*20))))
  def test_front_behind(self):
   o=[[0,0],[0,5],[9,19]]
   self.assertLess(u.catch(o,[[0,4]],1),u.catch(o,[[0,6]],1))
@@ -183,7 +183,7 @@ class JointCalculator(unittest.TestCase):
     if r and z[r][1]>=17:self.assertEqual(ids[j],n)
     else:
      if r:z[0],z[r]=z[r],z[0]
-     self.assertEqual(ids[j],u.INDEX[u.key(z,y[j].tolist())])
+     self.assertEqual(ids[j],u.INDEX[u.key(z,(u.force.seal(z,y[j].tolist(),[r if m==0 else 0 if m==r else m for m in u.assign_marks(x[j].tolist(),y[j].tolist())]) if r else y[j].tolist()))])
  def test_sparse_bellman_max_min(self):
   import numpy as np
   from scipy.sparse import csr_matrix
@@ -208,3 +208,26 @@ class JointCalculator(unittest.TestCase):
     candidates.append((x[0].tolist(),y[0].tolist(),r));values.append(float((p*solver.V[0,1-side,ids])[0]))
    a=max(range(300),key=lambda a:(values[a],sum(p[1] for p in candidates[a][0][1:]),sum(p!=q for p,q in zip(o,candidates[a][0])))) if side==0 else int(np.argmin(values))
    self.assertEqual(solver.concrete(o,d,side,1,marks),candidates[a])
+
+class ForceRules(unittest.TestCase):
+    def test_seal(self):
+        o=[[5,10],[2,12],[8,12]];d=[[5,11],[2,13],[8,13]]
+        sealed=u.force.seal(o,d,[0,1,2])
+        self.assertEqual(sealed[0],[4,10])
+        self.assertTrue(u.unique(o,sealed))
+        o[1]=[4,10]
+        self.assertTrue(u.unique(o,u.force.seal(o,d,[0,1,2])))
+        o[0]=[0,10]
+        self.assertTrue(u.unique(o,u.force.seal(o,d,[0,1,2])))
+    def test_break(self):
+        self.assertTrue(u.force.is_break([5,5],[4,6]))
+        self.assertFalse(u.force.is_break([5,5],[6,6]))
+        self.assertFalse(u.force.is_break([5,5],[4,15]))
+    def test_multiplier(self):
+        o=[[5,5],[2,7],[8,9]];d=[[0,0],[9,0],[0,19]]
+        old=u.force.BREAK_MULTIPLIER
+        try:
+            u.force.BREAK_MULTIPLIER=1;p=u.catch(o,d,1)
+            u.force.BREAK_MULTIPLIER=.7
+            self.assertAlmostEqual(u.catch(o,d,1),p*.7)
+        finally:u.force.BREAK_MULTIPLIER=old

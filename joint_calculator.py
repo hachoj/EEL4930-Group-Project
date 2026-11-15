@@ -1,6 +1,7 @@
 """Joint-intent sampled game. Sparse transition matrices retain every sampled outcome."""
 import itertools, json, pickle, random, time
 import numpy as np
+import force
 from scipy.sparse import csr_matrix
 
 INTENTS=['stay','SW','W','NW','S','N','SE','E','NE','get_open']
@@ -84,12 +85,19 @@ def realize(o,d,side,a,props):
     x,y=resolve_batch(o,d,side,x)
     return x,y,intents[2] if side==0 else 0
 
-def transitions(o,d,r,n):
+def transitions(o,d,r,n,marks=None):
     if not r:return keys(o,d),np.ones(len(o))
     a=o[:,0]-o[:,r];dist=np.sqrt((a*a).sum(-1));b=d-o[:,r,None];norm=np.sqrt((b*b).sum(-1))
     denom=dist[:,None]*norm;cos=np.divide((a[:,None]*b).sum(-1),denom,out=np.ones_like(denom),where=denom!=0)
-    p=1/(1+np.exp((dist*5-60)/20))*np.prod(1-.6*np.maximum(0,1-norm/3)*(.25+.75*(1+cos)/2),axis=1)
+    p=1/(1+np.exp(-(4.15701518-.06417449*dist*5)))*np.prod(1-.6*np.maximum(0,1-norm/3)*(.25+.75*(1+cos)/2),axis=1)
+    p*=np.where(force.is_break(o[:,0],o[:,r]),force.BREAK_MULTIPLIER,1.)
+    if marks is None:
+        perms=np.array(list(itertools.permutations(range(3))))
+        costs=np.stack([np.linalg.norm(d-o[:,perm],axis=2).sum(1) for perm in perms],axis=1)
+        marks=perms[costs.argmin(1)]
     x=o.copy();x[:,[0,r]]=x[:,[r,0]]
+    remapped=np.where(marks==0,r,np.where(marks==r,0,marks))
+    d=force.seal_batch(x,d,remapped)
     ids=keys(x,d);ids[o[:,r,1]>=17]=n
     return ids,p
 
@@ -109,7 +117,7 @@ class Solver:
         for side in (0,1):
             props=proposals(o,d) if side==0 else defense_proposals(o,d,marks)
             for a in range(300 if side==0 else 27):
-                x,y,r=realize(o,d,side,a,props);ids,p=transitions(x,y,r,n)
+                x,y,r=realize(o,d,side,a,props);ids,p=transitions(x,y,r,n,marks)
                 if r:
                     mat=csr_matrix((np.concatenate((p,1-p))/samples,(np.tile(row,2),np.concatenate((ids,np.full(len(ids),n+1))))),shape=(n,n+2))
                 else:mat=csr_matrix((p/samples,(row,ids)),shape=(n,n+2))
@@ -152,7 +160,7 @@ class Solver:
         values=np.zeros(count)
         for r in range(3 if side==0 else 1):
             mask=receivers==r
-            ids,p=transitions(x[mask],y[mask],r,len(self.V[0,0])-2)
+            ids,p=transitions(x[mask],y[mask],r,len(self.V[0,0])-2,np.repeat(np.array(marks)[None],mask.sum(),axis=0))
             values[mask]=p*self.V[t-1,1-side,ids]
         candidates=[(xx.tolist(),yy.tolist(),int(r)) for xx,yy,r in zip(x,y,receivers)]
         if side==0:
