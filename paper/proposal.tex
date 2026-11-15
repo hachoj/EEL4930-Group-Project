@@ -1,0 +1,96 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{url}
+
+\begin{document}
+
+\title{Solved Playbook or Frontier Model? Abstraction-Based Strategy Synthesis versus an LLM in 3v3 Ultimate Frisbee}
+
+\author{\IEEEauthorblockN{TEAM MEMBER 1, TEAM MEMBER 2, TEAM MEMBER 3}
+\IEEEauthorblockA{EEL4930, University of Florida\\
+\{email1, email2, email3\}@ufl.edu}}
+
+\maketitle
+
+\begin{abstract}
+We build a simplified, stochastic 3v3 Ultimate Frisbee game whose state space is too large to solve exactly, and use it to compare three ``coaches'': (i) a formal-methods coach that solves an abstracted version of the game exactly and plays the resulting strategy in the full game, (ii) a large language model (Claude Opus) that reads the full, unabstracted state as text, and (iii) a scripted baseline. Throw success probabilities are derived from professional Ultimate Frisbee Association (UFA) data and degraded by defender position. We evaluate win rate, turnover rate, and how far each coach's moves deviate from the abstract optimum, and we measure how well the abstract game's guaranteed value predicts real performance.
+\end{abstract}
+
+\section{Introduction and Motivation}
+A central skill in formal methods is handling systems too large to analyze directly: build a smaller model that can be analyzed, compute a strategy with guarantees on that model, and carry it back to the real system. The guarantee holds only for the model, so the interesting question is how much of it survives contact with the full system.
+
+Team sports make this question concrete. A field position in Ultimate Frisbee involves six players, a disc, and uncertain throws, so the exact game is far too large to solve. Meanwhile, large language models (LLMs) can read a full description of a game state and choose plausible moves with no abstraction at all, but with no guarantees either.
+
+We pit these two philosophies against each other in a game designed so that neither side is perfect: the formal coach is exact on a blurred game, and the LLM sees the real game but may make reckless choices. The result tells us when a provably optimal strategy for a simplified model is worth more than unconstrained reasoning over the full state.
+
+\section{Problem Statement}
+\textbf{Concrete game.} The field is a $10 \times 20$ grid; the last three rows are the endzone. Each team has three identical players. Turns alternate. On offense's turn, the disc holder may not move (as in real Ultimate) and either throws to a teammate or holds; the other two offensive players each move one square (8-neighborhood). On defense's turn, each defender moves one square. Each game is a single possession: offense wins if a teammate catches the disc in the endzone; defense wins on a turnover (incomplete throw) or after 30 turns.
+
+\textbf{Throw model.} A throw of distance $d$ to receiver $R$ is caught with probability
+\begin{equation}
+p_{\text{catch}} = p_{\text{UFA}}(d) \prod_{j} \bigl(1 - h_j\bigr),
+\end{equation}
+\begin{equation}
+h_j = 0.6 \cdot \max\!\Bigl(0,\, 1 - \tfrac{r_j}{3}\Bigr) \cdot \Bigl(0.25 + 0.75 \cdot \tfrac{1 + \cos\theta_j}{2}\Bigr),
+\end{equation}
+where $p_{\text{UFA}}(d)$ is the professional completion rate at distance $d$ fitted from UFA throw data~\cite{ufa}, $r_j$ is defender $j$'s distance to the receiver in squares, and $\theta_j$ is the angle at the receiver between defender $j$ and the thrower. A defender between thrower and receiver ($\theta_j \approx 0$) has the largest effect; one directly behind the receiver has a quarter of that effect; one three or more squares away has none.
+
+\textbf{Research question.} Given a turn-based stochastic game too large to solve exactly, does a strategy that is optimal for a finite abstraction outperform an LLM reasoning over the concrete state, and how well does the abstraction's computed value predict the strategy's real performance?
+
+\section{Proposed Approach}
+
+\subsection{The Calculator (formal methods)}
+We construct an abstract turn-based stochastic game $\hat{G} = (\hat{S}_O \cup \hat{S}_D, A, \hat{P}, \mathit{Goal})$. Each abstract state records the zone of each offensive player, using $3$ lanes $\times$ $4$ depths $= 12$ zones, which player holds the disc, and for each receiver whether its nearest defender is \emph{close in front}, \emph{close behind}, or \emph{far}. Abstract throw probabilities $\hat{P}$ are estimated by sampling concrete states that map to each abstract state and averaging $p_{\text{catch}}$; abstract movement transitions are derived the same way.
+
+The offense's objective is the bounded reachability property $\Diamond^{\le 30}\,\mathit{Goal}$. We compute the max--min reachability value and the corresponding optimal strategies for both players using value iteration for turn-based stochastic games~\cite{condon1992,baier2008}. We also compute the positive and almost-sure winning regions by attractor construction. When playing offense, the Calculator maps the concrete state to its abstract state and plays the maximizing strategy; on defense, it plays the minimizing strategy. With about $12^3 \times 3 \times 3^2 \approx 4.7 \times 10^4$ abstract states before the time bound, the game is small enough to solve exactly. We will cross-check the solver against \texttt{pymdptoolbox}~\cite{pymdptoolbox} on the MDP obtained by fixing the defense's strategy.
+
+\subsection{Opus (LLM)}
+Each turn, the concrete state (all player coordinates, disc holder, turn count, and the catch probability of every legal throw) is rendered as text. Claude Opus returns a move in a structured JSON format, chosen from an enumerated list of legal moves. Illegal or malformed answers are re-prompted once and otherwise replaced by ``hold.''
+
+\subsection{Scripted baseline}
+On offense, the baseline throws to the teammate with the highest $p_{\text{catch}}$ if it exceeds a fixed threshold and otherwise moves receivers toward the endzone. On defense, each defender moves to the in-front position of a fixed assigned receiver (man-to-man).
+
+\subsection{Experimental setup}
+Every coach plays offense against every coach on defense ($3 \times 3$ matchups), for $N$ games per matchup from a fixed set of randomized starting positions. We record:
+\begin{itemize}
+\item \textbf{Win rate:} fraction of possessions that score.
+\item \textbf{Turnover rate and turns to score.}
+\item \textbf{Abstract regret:} for each move, the gap between the abstract value of the move chosen and the abstract optimum; a move is flagged as a \emph{mistake} if the gap exceeds $\epsilon$.
+\item \textbf{Abstraction gap:} the difference between the Calculator's predicted value $\hat{V}(\hat{s}_0)$ and its empirical win rate in the concrete game.
+\end{itemize}
+We report 95\% confidence intervals on all rates.
+
+\section{Expected Outcomes}
+We expect the Calculator to have the lowest turnover rate and to be strongest on defense, where coarse positional rules transfer well, and Opus to find more scoring opportunities that the zones hide (e.g., a receiver one square open) at the cost of more risky throws. Against the scripted baseline, both should clearly win. The abstraction gap is itself a main result: it quantifies how much of the formal guarantee survives the trip back to the concrete game.
+
+\textbf{Challenges and mitigation.}
+\begin{itemize}
+\item \emph{Abstraction too coarse}, so the abstract optimum plays poorly. Mitigation: refine the zones where the abstraction gap is largest, in the spirit of counterexample-guided abstraction refinement~\cite{clarke2000}, and report results at two granularities.
+\item \emph{Non-determinism in the abstraction}: one abstract state covers concrete states with different outcomes. Mitigation: average over samples as above, and compare against an interval (pessimistic) estimate.
+\item \emph{UFA data granularity}: public statistics may not give completion rate by exact distance. Mitigation: fit a smooth logistic curve to binned completion rates and state the fit.
+\item \emph{LLM output errors and run-to-run variance}. Mitigation: legal-move menus, JSON output, fixed sampling settings, and enough games for tight confidence intervals.
+\end{itemize}
+
+\textbf{Future work.} A hybrid coach in which the Calculator's safety invariant \emph{shields} Opus, vetoing moves outside the safe region~\cite{alshiekh2018}, and simultaneous moves, which would turn the game into a concurrent reachability game~\cite{dealfaro2007}.
+
+\section{Questions for the Instructor}
+\begin{enumerate}
+\item Is comparing an abstraction-derived strategy against an LLM an appropriate scope, or should we also include a learned (RL) policy as a comparison point?
+\item Is bounded reachability (score within 30 turns) a good objective here, or would you prefer a discounted-reward formulation?
+\item Should the Calculator's strategy come from the quantitative max--min value, or from the qualitative almost-sure winning region plus a safety invariant?
+\item Is our abstract state space (about $5 \times 10^4$ states) an appropriate size, or would you like us to study how solving time scales as we refine it?
+\end{enumerate}
+
+\begin{thebibliography}{9}
+\bibitem{ufa} Ultimate Frisbee Association, ``UFA statistics,'' [Online]. Available: \url{https://www.watchufa.com/stats}
+\bibitem{condon1992} A.~Condon, ``The complexity of stochastic games,'' \emph{Information and Computation}, vol.~96, no.~2, pp.~203--224, 1992.
+\bibitem{baier2008} C.~Baier and J.-P.~Katoen, \emph{Principles of Model Checking}. MIT Press, 2008.
+\bibitem{pymdptoolbox} S.~Cordwell, ``pymdptoolbox: Markov decision process toolbox for Python,'' [Online]. Available: \url{https://github.com/sawcordwell/pymdptoolbox}
+\bibitem{clarke2000} E.~Clarke, O.~Grumberg, S.~Jha, Y.~Lu, and H.~Veith, ``Counterexample-guided abstraction refinement,'' in \emph{Proc. CAV}, 2000, pp.~154--169.
+\bibitem{alshiekh2018} M.~Alshiekh, R.~Bloem, R.~Ehlers, B.~K\"onighofer, S.~Niekum, and U.~Topcu, ``Safe reinforcement learning via shielding,'' in \emph{Proc. AAAI}, 2018.
+\bibitem{dealfaro2007} L.~de~Alfaro, T.~A.~Henzinger, and O.~Kupferman, ``Concurrent reachability games,'' \emph{Theoretical Computer Science}, vol.~386, no.~3, pp.~188--217, 2007.
+\end{thebibliography}
+
+\end{document}

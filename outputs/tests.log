@@ -1,0 +1,13 @@
+test_defense (test_ultimate.Rules.test_defense) ... ok
+test_distance (test_ultimate.Rules.test_distance) ... ok
+test_front_behind (test_ultimate.Rules.test_front_behind) ... ok
+test_holder_and_steps (test_ultimate.Rules.test_holder_and_steps) ... ok
+test_horizon (test_ultimate.Rules.test_horizon) ... ok
+test_overlap (test_ultimate.Rules.test_overlap) ... ok
+test_sampling (test_ultimate.Rules.test_sampling) ... ok
+test_terminal (test_ultimate.Rules.test_terminal) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.003s
+
+OK

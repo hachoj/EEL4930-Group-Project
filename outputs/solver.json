@@ -1,0 +1,18 @@
+{
+  "states_per_side": 15552,
+  "states": 31106,
+  "samples_per_state": 2,
+  "build_seconds": 2.5675262910081074,
+  "solve_seconds": 0.17819291702471673,
+  "seconds": 2.745719790982548,
+  "horizon": 30,
+  "positive_30": [
+    15550,
+    15547
+  ],
+  "almost_sure_30": [
+    0,
+    0
+  ],
+  "convergence": "exact 30 finite-horizon Bellman backups"
+}
