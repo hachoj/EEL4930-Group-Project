@@ -7,10 +7,10 @@ from matplotlib.animation import FuncAnimation, FFMpegWriter
 def pitch(ax,h,g,previous=None,alpha=1,show_marks=True,abstract=False):
     ax.clear();ax.set(xlim=(-1,21),ylim=(-1,11),aspect='equal');ax.set_facecolor('#287a41');ax.set_xticks([]);ax.set_yticks([])
     for y in range(20):ax.add_patch(Rectangle((y-.5,-.5),1,10,color='white',alpha=.035 if y%2 else .075))
-    for start in (-.5,16.5):
+    for start in (16.5,):
         ax.add_patch(Rectangle((start,-.5),3,10,color='#133d2b',alpha=.35));ax.text(start+1.5,4.5,'ENDZONE',rotation=90,ha='center',va='center',color='white',alpha=.5)
     ax.add_patch(Rectangle((-.5,-.5),20,10,fill=False,edgecolor='white',lw=2))
-    for y in (2.5,16.5):ax.plot([y,y],[-.5,9.5],color='white',lw=1.5)
+    for y in (16.5,):ax.plot([y,y],[-.5,9.5],color='white',lw=1.5)
     ax.plot([6.5],[4.5],marker='x',color='white');ax.text(6.5,3.8,'brick',color='white',ha='center',fontsize=7)
     o=np.array(h['o'],float);d=np.array(h['d'],float)
     if previous is not None:
@@ -21,14 +21,23 @@ def pitch(ax,h,g,previous=None,alpha=1,show_marks=True,abstract=False):
         k=key(h['o'],h['d']);edges=[-.5,4.5,9.5,14.5,16.5,19.5]
         for depth in range(5):
             for lane in range(3):
-                lo=[-.5,3.5,6.5][lane];hi=[3.5,6.5,9.5][lane]
+                lo=[-.5,2.5,6.5][lane];hi=[2.5,6.5,9.5][lane]
                 ax.add_patch(Rectangle((edges[depth],lo),edges[depth+1]-edges[depth],hi-lo,fill=False,edgecolor='white',alpha=.5))
                 ax.text(edges[depth]+.15,lo+.15,f'Z{3*depth+lane}',color='white',fontsize=6)
+        centers=[]
         for j,z in enumerate(k[:3]):
-            dep,lane=divmod(z,3);x=(edges[dep]+edges[dep+1])/2;y=[1.5,5,8][lane]+(j-1)*.5
-            color=['#efbb53','#d68af0','#9bdfba'][k[j+2]] if j else '#64c8ff'
-            ax.text(x,y,['A ●','B','C'][j],ha='center',color=color,weight='bold',bbox=dict(facecolor='#102b35',alpha=.85,boxstyle='round'))
-        ax.text(.01,.01,'A ● holder    Receiver coverage: gold front · purple behind · mint far',transform=ax.transAxes,color='white',fontsize=8)
+            dep,lane=divmod(z,3)
+            centers.append(np.array([(edges[dep]+edges[dep+1])/2,[1,4.5,8][lane]+(j-1)*.5]))
+        for j,pos in enumerate(centers):
+            ax.text(*pos,['A ●','B','C'][j],ha='center',color='#64c8ff',weight='bold',bbox=dict(facecolor='#102b35',alpha=.85,boxstyle='round'),zorder=6)
+            if j and k[j+2]!=2:
+                vector=centers[0]-pos
+                if np.linalg.norm(vector)<.01:vector=np.array([-1.,0.])
+                vector=vector/np.linalg.norm(vector)
+                icon=pos+vector*(.85 if k[j+2]==0 else -.85)
+                ax.scatter(*icon,s=100,c='#e45a43',marker='h',edgecolor='white',zorder=7)
+                ax.text(*icon,'D',ha='center',va='center',color='white',fontsize=6,zorder=8)
+        ax.text(.01,.01,'Red D: near front (toward A) / behind; absent = far.\nNo exact defender positions; holder coverage is not encoded.',transform=ax.transAxes,color='white',fontsize=8,bbox=dict(facecolor='#102b35',alpha=.9),zorder=10)
         ax.set_title('Calculator view: 3 lanes × 5 depths (endzone separated)',color='#173628');return
     if show_marks:
         for j,m in enumerate(marks):ax.plot([d[j,1],o[m,1]],[d[j,0],o[m,0]],'--',color='white',alpha=.4,lw=1)

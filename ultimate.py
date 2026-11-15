@@ -9,7 +9,8 @@ DELTAS=list(itertools.product((-1,0,1),repeat=2))
 KEYS=list(itertools.product(range(15),range(15),range(15),range(3),range(3)))
 INDEX={k:i for i,k in enumerate(KEYS)}
 # Disc holder is canonical index zero; reordering after a catch preserves identity-free play.
-def zone(p): return min(2,p[0]*3//10)+3*(p[1]//5 if p[1]<15 else 3 if p[1]<17 else 4)
+def lane(x): return 0 if x<3 else 1 if x<7 else 2
+def zone(p): return lane(p[0])+3*(p[1]//5 if p[1]<15 else 3 if p[1]<17 else 4)
 def catch(o,d,r):
     a=np.array(o[0],float)-o[r]; dist=float(np.linalg.norm(a)); p=1/(1+math.exp((dist*5-60)/20))
     for q in d:
@@ -83,7 +84,7 @@ def far_point(o,rng):
 def representative(k,rng):
     # Rejection produces exactly the requested key, including correlated labels.
     for attempt in range(100000):
-        o=[[rng.choice([x for x in range(10) if x*3//10==z%3]),rng.randrange(*((z//3*5,z//3*5+5) if z//3<3 else (15,17) if z//3==3 else (17,20)))] for z in k[:3]]
+        o=[[rng.choice([x for x in range(10) if lane(x)==z%3]),rng.randrange(*((z//3*5,z//3*5+5) if z//3<3 else (15,17) if z//3==3 else (17,20)))] for z in k[:3]]
         d=[]
         for j,label in enumerate(k[3:],1):
             if label==2:d.append(far_point(o,rng))
@@ -187,6 +188,17 @@ def llm(o,d,side,t,model,marks=None):
         except (ValueError,AttributeError,KeyError,AssertionError,TypeError):pass
     return 120 if side==0 else 364
 
+def scripted_cut(o,d):
+    # Independently choose both cuts, reserving occupied squares jointly.
+    x=[list(p) for p in o]; occupied={tuple(p) for p in o+d}
+    for j in (1,2):
+        occupied.remove(tuple(o[j]))
+        options=[move(o[j],v) for v in DELTAS]
+        options=[p for p in options if tuple(p) not in occupied]
+        x[j]=max(options,key=lambda p:(p[1]+.8*min(math.dist(p,q) for q in d),math.dist(p,o[j])))
+        occupied.add(tuple(x[j]))
+    return x,[list(p) for p in d],0
+
 def choose(name,o,d,side,t,solver,model,marks=None):
     qs=solver.qs(o,d,side,t)
     if name=='Calculator':
@@ -196,10 +208,11 @@ def choose(name,o,d,side,t,solver,model,marks=None):
     elif name=='Scripted':
         a=1 if side==0 else 0
         if side==0:
-            x,y,_=action(o,d,side,1); targets=[r for r in (1,2) if x[r][1]>x[0][1]]
+            x,y,_=scripted_cut(o,d); targets=[r for r in (1,2) if x[r][1]>x[0][1]]
             r=max(targets,key=lambda r:catch(x,y,r)) if targets else 0
             a=r+2 if r and catch(x,y,r)>=.65 else 1
-        x,y,r=action(o,d,side,a,marks)
+        if side==0:r=a-2 if a>=3 else 0
+        else:x,y,r=action(o,d,side,a,marks)
     else:
         a=llm(o,d,side,t,model,marks); r=a%3 if side==0 else 0; code=a//3 if side==0 else a; digits=[]
         for _ in range(2 if side==0 else 3):digits.insert(0,code%9); code//=9

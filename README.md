@@ -50,3 +50,9 @@ Run `uv run python ultimate.py --n 30 --no-llm --out outputs_dev/v3`.
 Defensive assignments are a nearest-distance bijection at possession start and follow player identity through catches. Calculator actions position around that mark; Scripted marks tight-front; the LLM prompt names each assignment. The compressed model does not store assignments, so representative sampling uses a nearest bijection and concrete policy refinement uses the actual fixed marks.
 
 Replays now contain synchronized concrete and abstract panels, landscape grass pitch, jersey labels, throw/result annotations, smooth steps and a two-second final hold. `--hide-marks` hides defensive assignment links. MP4s use H.264 yuv420p, `+faststart`, and metadata stripping. `calculator_view.{png,pdf}` compares the same moment; it shows the actual 3×5 zones after the endzone-alias repair. Detailed measured results are in `VALIDATION_V3.md`.
+
+## Symmetric lanes and coverage rendering (v4)
+
+Lane cells are x=0–2, 3–6, 7–9 (3/4/3); depth bands remain y=0–4, 5–9, 10–14, 15–16, 17–19. The only endzone is y=17–19. Sampler and mapping share the lane function. Abstract red D icons indicate each receiver's nearest defender front/behind relative to the holder; far has no icon. No holder coverage or exact defender positions are encoded. These are coverage icons, not fixed-mark identities.
+
+Every action applies all player proposals before resolving collisions, and replay interpolation updates entire team arrays at the same fraction. Calculator uses joint but restricted movement macros, not all 81 receiver/729 defender combinations. LLM named fields independently choose both receiver/all defender moves. Scripted now independently selects open-space cuts with forward progress rather than repeatedly walking into a fixed marker. `movement_report.py` compares identity-aligned recorded moves (including post-catch relabeling).

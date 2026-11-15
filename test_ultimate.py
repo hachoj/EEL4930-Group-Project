@@ -119,3 +119,35 @@ class FixedMarks(unittest.TestCase):
      self.assertTrue(all(math.dist(h['d'][j],h['o'][m])<=3 for j,m in enumerate(marks)))
     if h.get('throw_result')=='caught':
      r=h['o'].index(h['receiver']);marks=[r if m==0 else 0 if m==r else m for m in marks]
+
+class SymmetricLanes(unittest.TestCase):
+ def test_mirrored_lanes(self):
+  for y in range(20):
+   for x in range(10):self.assertEqual(u.zone([x,y])%3,2-u.zone([9-x,y])%3)
+  self.assertEqual([sum(u.lane(x)==i for x in range(10)) for i in range(3)],[3,4,3])
+
+class JointMovement(unittest.TestCase):
+ def test_joint_moves(self):
+  o=[[1,3],[4,4],[8,5]];d=[[1,6],[4,7],[8,8]]
+  x,y,r=u.action(o,d,0,1)
+  self.assertEqual(sum(a!=b for a,b in zip(o,x)),2)
+  self.assertEqual(x[0],o[0]);self.assertTrue(u.unique(x,y))
+  x,y,r=u.action(o,d,1,0,[0,1,2])
+  self.assertEqual(sum(a!=b for a,b in zip(d,y)),3)
+  self.assertTrue(u.unique(x,y))
+
+class LaneSampling(unittest.TestCase):
+ def test_sample_keys(self):
+  import random
+  rng=random.Random(72)
+  for lane in range(3):
+   for tag in range(3):
+    k=(lane,3+lane,6+lane,tag,2)
+    o,d=u.representative(k,rng)
+    self.assertEqual(u.key(o,d),k)
+ def test_scripted_cuts_are_joint_and_legal(self):
+  o=[[1,3],[4,4],[8,5]];d=[[1,6],[4,7],[8,8]]
+  x,y,r=u.scripted_cut(o,d)
+  self.assertEqual(x[0],o[0]);self.assertTrue(u.unique(x,y))
+  self.assertEqual(sum(a!=b for a,b in zip(o,x)),2)
+  for a,b in zip(o,x):self.assertLessEqual(max(abs(a[i]-b[i]) for i in (0,1)),1)
