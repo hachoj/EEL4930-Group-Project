@@ -32,3 +32,56 @@ class Rules(unittest.TestCase):
   for t in range(1,3):v[t,0]=max(v[t-1,0],v[t-1,1])
   self.assertEqual(v[2,0],1)
 if __name__=='__main__':unittest.main()
+
+class CollisionRules(unittest.TestCase):
+ def test_starts(self):
+  for seed in range(100):
+   o,d=u.start_positions(seed,depth=0)
+   self.assertTrue(u.unique(o,d));self.assertEqual((o,d),u.start_positions(seed,depth=0))
+   self.assertTrue(all(p[1]<=2 for p in o))
+   self.assertTrue(all(1<=math.dist(p,q)<=2 for p,q in zip(o,d)))
+ def test_no_overlap_during_play(self):
+  for seed in range(30):
+   o,d=u.start_positions(seed)
+   for t in range(30):
+    for a in range(5 if t%2==0 else 4):
+     x,y,r=u.action(o,d,t%2,a);self.assertTrue(u.unique(x,y))
+    o,d,r=u.action(o,d,t%2,(t+seed)%(5 if t%2==0 else 4))
+ def test_collision_holds(self):
+  o=[[2,2],[2,1],[5,1]];d=[[2,3],[5,3],[8,3]]
+  x,y,r=u.action(o,d,0,1)
+  self.assertEqual(x[1],o[1]);self.assertTrue(u.unique(x,y))
+
+class Refinement(unittest.TestCase):
+ def test_endzone_has_own_zone(self):
+  self.assertNotEqual(u.zone([5,16]),u.zone([5,17]))
+  self.assertEqual(u.zone([5,17]),u.zone([5,19]))
+ def test_calibrated_starts(self):
+  for seed in range(100):
+   o,d=u.start_positions(seed)
+   self.assertTrue(u.unique(o,d));self.assertEqual([p[1] for p in o],[12,13,14])
+ def test_recorded_runs_no_overlap(self):
+  import json
+  from pathlib import Path
+  f=Path('outputs_dev/games.json')
+  if not f.exists():self.skipTest('optional recorded pilot absent')
+  for g in json.loads(f.read_text()):
+   for h in g['history']:self.assertTrue(u.unique(h['o'],h['d']))
+
+class NamedLLM(unittest.TestCase):
+ def test_named_reply_and_reported_model(self):
+  import json,tempfile
+  from pathlib import Path
+  from unittest.mock import patch
+  from types import SimpleNamespace
+  old=u.OUT
+  with tempfile.TemporaryDirectory() as folder:
+   u.OUT=Path(folder)
+   reply={'result':json.dumps({'move_B':'stay','move_C':'stay','action':'hold'}),'modelUsage':{'test-reported-model':{}}}
+   try:
+    with patch.object(u.subprocess,'run',return_value=SimpleNamespace(stdout=json.dumps(reply),stderr='')) as call:
+     self.assertEqual(u.llm(*u.start_positions(42),0,30,'test-model'),120)
+     prompt=json.loads(call.call_args.args[0][-1])
+     self.assertIn('B',prompt['move_options']);self.assertNotIn('encoding',prompt)
+     self.assertIn('test-reported-model',u.MODEL_IDS)
+   finally:u.OUT=old;u.MODEL_IDS.discard('test-reported-model')
