@@ -96,45 +96,7 @@ def representative(k,rng):
         if unique(o,d) and key(o,d)==k:return o,d
     raise RuntimeError(f'Could not sample key {k}')
 
-class Solver:
-    def __init__(self,samples=30):
-        start=time.monotonic(); n=len(KEYS); self.P=np.zeros((2,n,5,samples,2)); self.J=np.full((2,n,5,samples,2),n+1,dtype=np.int32)
-        rng=random.Random(1201)
-        for i,k in enumerate(KEYS):
-            for s in range(samples):
-                o,d=representative(k,rng)
-                for side in (0,1):
-                    for a in range(5 if side==0 else 4):
-                        for b,(p,j) in enumerate(outcomes(o,d,side,a)):
-                            self.P[side,i,a,s,b]=p; self.J[side,i,a,s,b]=n if j==-1 else n+1 if j==-2 else j
-        build_seconds=time.monotonic()-start; solve_start=time.monotonic(); self.V=np.zeros((31,2,n+2)); self.V[:,:,n]=1
-        self.policy=np.zeros((31,2,n),dtype=np.int8)
-        for t in range(1,31):
-            for side in (0,1):
-                q=self.q_all(t,side)
-                self.policy[t,side]=q.argmax(1) if side==0 else q.argmin(1)
-                self.V[t,side,:n]=q.max(1) if side==0 else q.min(1)
-        # Finite-horizon support attractors; no floating-point equality required.
-        positive=np.zeros((31,2,n+2),bool); sure=positive.copy(); positive[:,:,n]=True; sure[:,:,n]=True
-        for t in range(1,31):
-            for side in (0,1):
-                support=self.P[side]>0; ids=self.J[side]
-                pos=(positive[t-1,1-side][ids]&support).any((2,3))
-                certain=(sure[t-1,1-side][ids]|~support).all((2,3))
-                count=5 if side==0 else 4
-                positive[t,side,:n]=pos[:,:count].any(1) if side==0 else pos[:,:count].all(1)
-                sure[t,side,:n]=certain[:,:count].any(1) if side==0 else certain[:,:count].all(1)
-        self.info={'states_per_side':n,'states':2*n+2,'samples_per_state':samples,'build_seconds':build_seconds,'solve_seconds':time.monotonic()-solve_start,'seconds':time.monotonic()-start,'horizon':30,'positive_30':positive[30,:,:n].sum(axis=1).tolist(),'almost_sure_30':sure[30,:,:n].sum(axis=1).tolist(),'convergence':'exact 30 finite-horizon Bellman backups'}
-        (OUT/'solver.json').write_text(json.dumps(self.info,indent=2)); print(self.info,flush=True)
-    def q_all(self,t,side):
-        q=(self.P[side]*self.V[t-1,1-side][self.J[side]]).sum(3).mean(2)
-        if side:q[:,4]=np.inf
-        return q
-    def qs(self,o,d,side,t):
-        i=INDEX[key(o,d)]
-        q=(self.P[side,i]*self.V[t-1,1-side][self.J[side,i]]).sum(2).mean(1)
-        if side:q[4]=np.inf
-        return q
+from joint_calculator import Solver
 
 DIRECTION_NAMES=['SW','W','NW','S','stay','N','SE','E','NE']
 MODEL_IDS=set()
@@ -202,9 +164,7 @@ def scripted_cut(o,d):
 def choose(name,o,d,side,t,solver,model,marks=None):
     qs=solver.qs(o,d,side,t)
     if name=='Calculator':
-        # Concrete one-step refinement of the abstract value, over the same macros.
-        values=[sum(p*(1. if j==-1 else 0. if j==-2 else solver.V[t-1,1-side,j]) for p,j in outcomes(o,d,side,a,marks)) for a in range(5 if side==0 else 4)]
-        a=(max(range(5),key=lambda a:(values[a],sum(p[1] for p in action(o,d,side,a,marks)[0][1:]))) if side==0 else int(np.argmin(values))); x,y,r=action(o,d,side,a,marks)
+        x,y,r=solver.concrete(o,d,side,t,assign_marks(o,d) if marks is None else marks)
     elif name=='Scripted':
         a=1 if side==0 else 0
         if side==0:
@@ -235,7 +195,7 @@ def game(off,deff,seed,solver,model):
     pred=float(solver.V[30,0,INDEX[key(o,d)]]); history=[]; outcome='timeout'; regrets=[]
     for turn in range(30):
         side=turn%2; x,y,r,p,regret=choose(off if side==0 else deff,o,d,side,30-turn,solver,model,marks)
-        alternatives=solver.qs(o,d,side,30-turn).tolist()[:5 if side==0 else 4]
+        alternatives=solver.qs(o,d,side,30-turn).tolist()
         record={'marks':marks[:],'mark_distance':float(np.mean([math.dist(y[j],x[m]) for j,m in enumerate(marks)])),'abstract_alternatives':alternatives,'abstract_state':list(key(o,d)),'o':[v[:] for v in x],'d':[v[:] for v in y],'thrower':o[0],'receiver':x[r] if r else None,'p':p,'turn':turn+1,'side':side,'regret':regret}; history.append(record); regrets.append(regret)
         o,d=x,y
         if r:
@@ -281,7 +241,7 @@ def main():
     if not args.no_llm:
         test=subprocess.run(['claude','-p','--model',args.model,'Return only {"ok":true}'],text=True,capture_output=True,timeout=120)
         if test.returncode:raise SystemExit('LLM preflight failed: '+test.stdout+test.stderr)
-    start=time.monotonic();solver=Solver(args.samples);names=['Calculator','Scripted']+([] if args.no_llm else ['LLM']);jobs=list(itertools.product(names,names,range(args.n)))
+    start=time.monotonic();solver=Solver(args.samples,out=OUT);names=['Calculator','Scripted']+([] if args.no_llm else ['LLM']);jobs=list(itertools.product(names,names,range(args.n)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:games=list(pool.map(lambda j:game(j[0],j[1],1700+j[2],solver,args.model),jobs))
     (OUT/'games.json').write_text(json.dumps(games,indent=2));rows=summarize(games);(OUT/'summary.json').write_text(json.dumps(rows,indent=2))
     with (OUT/'games.csv').open('w') as f:

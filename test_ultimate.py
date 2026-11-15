@@ -151,3 +151,60 @@ class LaneSampling(unittest.TestCase):
   self.assertEqual(x[0],o[0]);self.assertTrue(u.unique(x,y))
   self.assertEqual(sum(a!=b for a,b in zip(o,x)),2)
   for a,b in zip(o,x):self.assertLessEqual(max(abs(a[i]-b[i]) for i in (0,1)),1)
+
+class JointCalculator(unittest.TestCase):
+ def test_action_product_and_typical_receiver_movement(self):
+  import numpy as np
+  import joint_calculator as c
+  self.assertEqual(len(c.OFF_ACTIONS),300);self.assertEqual(len(c.DEF_ACTIONS),27)
+  solver=c.Solver.__new__(c.Solver)
+  solver.V=np.zeros((31,2,len(u.KEYS)+2));solver.V[:,:,len(u.KEYS)]=1
+  # Equal continuation values exercise policy tie-breaking, without a full build.
+  o,d=u.start_positions(1700)
+  x,y,r=solver.concrete(o,d,0,30,u.assign_marks(o,d))
+  self.assertEqual(x[0],o[0]);self.assertEqual(sum(p!=q for p,q in zip(o,x)),2)
+  self.assertTrue(u.unique(x,y))
+ def test_vectorized_transitions_match_rules(self):
+  import numpy as np
+  import joint_calculator as c
+  import random
+  rng=random.Random(77)
+  reps=[u.representative(k,rng) for k in rng.sample(u.KEYS,100)]
+  o=np.array([p[0] for p in reps]);d=np.array([p[1] for p in reps]);n=len(u.KEYS)
+  self.assertEqual(c.keys(o,d).tolist(),[u.INDEX[u.key(x,y)] for x,y in reps])
+  props=c.proposals(o,d)
+  for a in (0,44,123,245,299):
+   x,y,r=c.realize(o,d,0,a,props);ids,prob=c.transitions(x,y,r,n)
+   for j in range(len(o)):
+    self.assertTrue(u.unique(x[j].tolist(),y[j].tolist()))
+    self.assertTrue(np.max(abs(x[j]-o[j]))<=1)
+    if r:self.assertAlmostEqual(prob[j],u.catch(x[j].tolist(),y[j].tolist(),r))
+    z=x[j].tolist()
+    if r and z[r][1]>=17:self.assertEqual(ids[j],n)
+    else:
+     if r:z[0],z[r]=z[r],z[0]
+     self.assertEqual(ids[j],u.INDEX[u.key(z,y[j].tolist())])
+ def test_sparse_bellman_max_min(self):
+  import numpy as np
+  from scipy.sparse import csr_matrix
+  import joint_calculator as c
+  solver=c.Solver.__new__(c.Solver)
+  solver.V=np.zeros((2,2,3));solver.V[:,:,1]=1
+  solver.matrices=[[csr_matrix([[0,.4,.6]]),csr_matrix([[0,.8,.2]])]]*2
+  self.assertAlmostEqual(solver.q_all(1,0).max(),.8)
+  self.assertAlmostEqual(solver.q_all(1,1).min(),.4)
+ def test_batched_policy_matches_scalar_candidates(self):
+  import numpy as np
+  import joint_calculator as c
+  o,d=u.start_positions(1701);marks=u.assign_marks(o,d)
+  solver=c.Solver.__new__(c.Solver)
+  solver.V=np.random.default_rng(45).random((2,2,len(u.KEYS)+2));solver.V[:,:,len(u.KEYS)]=1;solver.V[:,:,len(u.KEYS)+1]=0
+  for side in (0,1):
+   oo=np.array(o)[None];dd=np.array(d)[None]
+   props=c.proposals(oo,dd) if side==0 else c.defense_proposals(oo,dd,np.array(marks)[None])
+   candidates=[];values=[]
+   for a in range(300 if side==0 else 27):
+    x,y,r=c.realize(oo,dd,side,a,props);ids,p=c.transitions(x,y,r,len(u.KEYS))
+    candidates.append((x[0].tolist(),y[0].tolist(),r));values.append(float((p*solver.V[0,1-side,ids])[0]))
+   a=max(range(300),key=lambda a:(values[a],sum(p[1] for p in candidates[a][0][1:]),sum(p!=q for p,q in zip(o,candidates[a][0])))) if side==0 else int(np.argmin(values))
+   self.assertEqual(solver.concrete(o,d,side,1,marks),candidates[a])
