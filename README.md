@@ -43,3 +43,10 @@ Rate CIs are Wilson 95%; mistake and conditional score-turn CIs are percentile b
 ## Outputs
 
 `<out>/games.json` contains every recorded move, catch probability, regret and outcome; `games.csv` has game metrics; `summary.json` has rates/CIs; `solver.json` has state counts, sampling/build and solve timing and attractor sizes; `run.json` has model, N and wall time. `run.log` prints the actual results table as structured JSON. Each of win_rate, turnover_rate, mistake_rate and abstraction_gap has PNG and PDF heatmaps. `demo_<coach>.mp4` renders real recorded trajectories, with `demo_<coach>_frame.png` for inspection. Videos are generated for every available offensive coach; no LLM video exists until an authenticated run succeeds.
+
+## Fixed-mark revision
+
+Run `uv run python ultimate.py --n 30 --no-llm --out outputs_dev/v3`.
+Defensive assignments are a nearest-distance bijection at possession start and follow player identity through catches. Calculator actions position around that mark; Scripted marks tight-front; the LLM prompt names each assignment. The compressed model does not store assignments, so representative sampling uses a nearest bijection and concrete policy refinement uses the actual fixed marks.
+
+Replays now contain synchronized concrete and abstract panels, landscape grass pitch, jersey labels, throw/result annotations, smooth steps and a two-second final hold. `--hide-marks` hides defensive assignment links. MP4s use H.264 yuv420p, `+faststart`, and metadata stripping. `calculator_view.{png,pdf}` compares the same moment; it shows the actual 3×5 zones after the endzone-alias repair. Detailed measured results are in `VALIDATION_V3.md`.

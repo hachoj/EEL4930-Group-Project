@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 OUT=Path('outputs_dev')
 START_DEPTH=12
+SHOW_MARKS=True
 DELTAS=list(itertools.product((-1,0,1),repeat=2))
 KEYS=list(itertools.product(range(15),range(15),range(15),range(3),range(3)))
 INDEX={k:i for i,k in enumerate(KEYS)}
@@ -43,7 +44,11 @@ def start_positions(seed,depth=None):
     d=[[p[0],p[1]+rng.choice((1,2))] for p in o]
     return o,d
 
-def action(o,d,side,a):
+def assign_marks(o,d):
+    # Minimum-total-distance bijection; labels are remapped after a catch.
+    return list(min(itertools.permutations(range(3)),key=lambda perm:sum(math.dist(d[j],o[perm[j]]) for j in range(3))))
+
+def action(o,d,side,a,marks=None):
     old_o=[list(x) for x in o]; old_d=[list(x) for x in d]
     o=[list(x) for x in o]; d=[list(x) for x in d]; r=0
     if side==0:
@@ -52,17 +57,18 @@ def action(o,d,side,a):
             for j in (1,2): o[j]=toward(o[j],([0 if j==1 else 9,19] if a==2 else [o[j][0],19]))
         r=a-2 if a>=3 else 0
     else:
-        # 0 hold, 1 mark in front, 2 behind, 3 switch assignments.
+        marks=assign_marks(o,d) if marks is None else marks
+        # All actions follow the fixed mark: tight front, tight behind,
+        # loose front and lateral front. No assignment switching.
         for j in range(3):
-            if a:
-                target=o[(j+1)%3] if a==3 else o[j]
-                target=[target[0],target[1]+(1 if a==2 else -1)]
-                d[j]=toward(d[j],target)
+            target=o[marks[j]]
+            offset=[(0,-1),(0,1),(0,-2),(1,-1)][a]
+            d[j]=toward(d[j],[target[0]+offset[0],target[1]+offset[1]])
     o,d=resolve(o,d,side,old_o,old_d)
     return o,d,r
 
-def outcomes(o,d,side,a):
-    x,y,r=action(o,d,side,a)
+def outcomes(o,d,side,a,marks=None):
+    x,y,r=action(o,d,side,a,marks)
     if not r:return [(1.,INDEX[key(x,y)])]
     p=catch(x,y,r)
     if x[r][1]>=17:return [(p,-1),(1-p,-2)]
@@ -132,7 +138,7 @@ class Solver:
 DIRECTION_NAMES=['SW','W','NW','S','stay','N','SE','E','NE']
 MODEL_IDS=set()
 
-def llm(o,d,side,t,model):
+def llm(o,d,side,t,model,marks=None):
     labels=['B','C'] if side==0 else ['D1','D2','D3']
     players=o[1:] if side==0 else d
     options={}
@@ -155,7 +161,7 @@ def llm(o,d,side,t,model):
         'side':'offense' if side==0 else 'defense','turns_left':t,'field':field,'distances_to_defenders':proximity,
         'throw_distances':{label:round(math.dist(o[0],o[j]),2) for label,j in [('B',1),('C',2)]},
         'current_p_catch':{label:round(catch(o,d,j),4) for label,j in [('B',1),('C',2)]},
-        'move_options':options,'answer_example':schema})
+        'fixed_defensive_marks':{f'D{j+1}':['A','B','C'][m] for j,m in enumerate(assign_marks(o,d) if marks is None else marks)},'defense_instruction':'Follow your assigned player throughout the possession, including the holder; choose positioning around your own mark.', 'move_options':options,'answer_example':schema})
     digest=hashlib.sha256((model+prompt).encode()).hexdigest();cache=OUT/'cache';cache.mkdir(exist_ok=True);f=cache/(digest+'.json')
     if f.exists():
         saved=json.loads(f.read_text());MODEL_IDS.update(saved.get('models',[]));return saved['id']
@@ -181,21 +187,21 @@ def llm(o,d,side,t,model):
         except (ValueError,AttributeError,KeyError,AssertionError,TypeError):pass
     return 120 if side==0 else 364
 
-def choose(name,o,d,side,t,solver,model):
+def choose(name,o,d,side,t,solver,model,marks=None):
     qs=solver.qs(o,d,side,t)
     if name=='Calculator':
         # Concrete one-step refinement of the abstract value, over the same macros.
-        values=[sum(p*(1. if j==-1 else 0. if j==-2 else solver.V[t-1,1-side,j]) for p,j in outcomes(o,d,side,a)) for a in range(5 if side==0 else 4)]
-        a=(max(range(5),key=lambda a:(values[a],sum(p[1] for p in action(o,d,side,a)[0][1:]))) if side==0 else int(np.argmin(values))); x,y,r=action(o,d,side,a)
+        values=[sum(p*(1. if j==-1 else 0. if j==-2 else solver.V[t-1,1-side,j]) for p,j in outcomes(o,d,side,a,marks)) for a in range(5 if side==0 else 4)]
+        a=(max(range(5),key=lambda a:(values[a],sum(p[1] for p in action(o,d,side,a,marks)[0][1:]))) if side==0 else int(np.argmin(values))); x,y,r=action(o,d,side,a,marks)
     elif name=='Scripted':
-        a=1
+        a=1 if side==0 else 0
         if side==0:
             x,y,_=action(o,d,side,1); targets=[r for r in (1,2) if x[r][1]>x[0][1]]
             r=max(targets,key=lambda r:catch(x,y,r)) if targets else 0
             a=r+2 if r and catch(x,y,r)>=.65 else 1
-        x,y,r=action(o,d,side,a)
+        x,y,r=action(o,d,side,a,marks)
     else:
-        a=llm(o,d,side,t,model); r=a%3 if side==0 else 0; code=a//3 if side==0 else a; digits=[]
+        a=llm(o,d,side,t,model,marks); r=a%3 if side==0 else 0; code=a//3 if side==0 else a; digits=[]
         for _ in range(2 if side==0 else 3):digits.insert(0,code%9); code//=9
         x=[list(p) for p in o]; y=[list(p) for p in d]
         for j,v in enumerate(digits):
@@ -212,18 +218,19 @@ def choose(name,o,d,side,t,solver,model):
     return x,y,r,p,regret
 
 def game(off,deff,seed,solver,model):
-    rng=random.Random(seed); o,d=start_positions(seed)
+    rng=random.Random(seed); o,d=start_positions(seed); marks=assign_marks(o,d)
     pred=float(solver.V[30,0,INDEX[key(o,d)]]); history=[]; outcome='timeout'; regrets=[]
     for turn in range(30):
-        side=turn%2; x,y,r,p,regret=choose(off if side==0 else deff,o,d,side,30-turn,solver,model)
+        side=turn%2; x,y,r,p,regret=choose(off if side==0 else deff,o,d,side,30-turn,solver,model,marks)
         alternatives=solver.qs(o,d,side,30-turn).tolist()[:5 if side==0 else 4]
-        record={'abstract_alternatives':alternatives,'abstract_state':list(key(o,d)),'o':[v[:] for v in x],'d':[v[:] for v in y],'thrower':o[0],'receiver':x[r] if r else None,'p':p,'turn':turn+1,'side':side,'regret':regret}; history.append(record); regrets.append(regret)
+        record={'marks':marks[:],'mark_distance':float(np.mean([math.dist(y[j],x[m]) for j,m in enumerate(marks)])),'abstract_alternatives':alternatives,'abstract_state':list(key(o,d)),'o':[v[:] for v in x],'d':[v[:] for v in y],'thrower':o[0],'receiver':x[r] if r else None,'p':p,'turn':turn+1,'side':side,'regret':regret}; history.append(record); regrets.append(regret)
         o,d=x,y
         if r:
             if rng.random()>p:history[-1]['throw_result']='dropped';outcome='turnover'; break
             history[-1]['throw_result']='caught'
             if o[r][1]>=17:outcome='score'; break
             o[0],o[r]=o[r],o[0]
+            marks=[r if m==0 else 0 if m==r else m for m in marks]
     return {'offense':off,'defense':deff,'seed':seed,'outcome':outcome,'turns':len(history),'predicted':pred,'mistake_rate':float(np.mean(np.array(regrets)>.02)),'mean_regret':float(np.mean(regrets)),'history':history}
 
 def wilson(k,n):
@@ -249,18 +256,13 @@ def render(games,rows):
         fig.tight_layout()
         for ext in ('png','pdf'):fig.savefig(OUT/f'{metric}.{ext}')
         plt.close(fig)
-    for name in names:
-        g=next(g for g in games if g['offense']==name); fig,ax=plt.subplots(figsize=(5,8))
-        def frame(i):
-            ax.clear(); h=g['history'][min(i,len(g['history'])-1)]; ax.set(xlim=(-.5,9.5),ylim=(-.5,19.5),aspect='equal'); ax.axhspan(16.5,19.5,color='lightgreen'); ax.scatter(*zip(*h['o']),s=150,c='royalblue',marker='o',edgecolor='navy',label=g['offense']+' offense');ax.scatter(*zip(*h['d']),s=150,c='tomato',marker='x',linewidths=2,label=g['defense']+' defense');ax.scatter(*h['thrower'],s=45,c='gold',edgecolor='black',zorder=5)
-            if h['receiver']:
-                ax.annotate('',xy=h['receiver'],xytext=h['thrower'],arrowprops={'arrowstyle':'->','connectionstyle':'arc3,rad=.2','color':'black'}); ax.text(.02,.02,f"p(catch)={h['p']:.3f} · {h.get('throw_result','')}",transform=ax.transAxes)
-            ax.set_title(f"{g['offense']} offense vs {g['defense']} defense\nTurn {h['turn']} · {g['outcome'] if i>=len(g['history'])-1 else 'playing'}");ax.legend(loc='upper left');ax.set_xticks(range(10));ax.set_yticks(range(20));ax.grid(alpha=.2)
-        anim=FuncAnimation(fig,frame,frames=len(g['history'])+4,interval=650);anim.save(OUT/f'demo_{name}.mp4',writer='ffmpeg',fps=2);frame(next((i for i,h in enumerate(g['history']) if h['receiver']),0));fig.savefig(OUT/f'demo_{name}_frame.png');plt.close(fig)
+    from replay import render_replays
+    render_replays(games,OUT,show_marks=SHOW_MARKS)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--n',type=int,default=3);p.add_argument('--model',default='haiku');p.add_argument('--no-llm',action='store_true');p.add_argument('--samples',type=int,default=30);p.add_argument('--start-depth',type=int,choices=range(0,15),default=12);p.add_argument('--out',type=Path,default=Path('outputs_dev'));args=p.parse_args()
-    global OUT, START_DEPTH
+    p=argparse.ArgumentParser();p.add_argument('--n',type=int,default=3);p.add_argument('--model',default='haiku');p.add_argument('--no-llm',action='store_true');p.add_argument('--samples',type=int,default=30);p.add_argument('--start-depth',type=int,choices=range(0,15),default=12);p.add_argument('--out',type=Path,default=Path('outputs_dev'));p.add_argument('--hide-marks',action='store_true');args=p.parse_args()
+    global OUT, START_DEPTH, SHOW_MARKS
+    SHOW_MARKS=not args.hide_marks
     START_DEPTH=args.start_depth
     OUT=args.out;OUT.mkdir(parents=True,exist_ok=True)
     if not args.no_llm:

@@ -85,3 +85,37 @@ class NamedLLM(unittest.TestCase):
      self.assertIn('B',prompt['move_options']);self.assertNotIn('encoding',prompt)
      self.assertIn('test-reported-model',u.MODEL_IDS)
    finally:u.OUT=old;u.MODEL_IDS.discard('test-reported-model')
+
+class FixedMarks(unittest.TestCase):
+ def test_bijection_and_catch_remap(self):
+  for seed in range(50):
+   o,d=u.start_positions(seed); marks=u.assign_marks(o,d)
+   self.assertEqual(sorted(marks),[0,1,2])
+   identities=[o[m][:] for m in marks]
+   for r in (1,2):
+    x=[p[:] for p in o];x[0],x[r]=x[r],x[0]
+    remap=[r if m==0 else 0 if m==r else m for m in marks]
+    self.assertEqual([x[m] for m in remap],identities)
+ def test_all_calculator_macros_follow_fixed_marks(self):
+  # Covers every candidate the solved Calculator policy can select.
+  for a in range(4):
+   for seed in range(30):
+    o,d=u.start_positions(seed);marks=u.assign_marks(o,d)
+    for turn in range(10):
+     o,_,_=u.action(o,d,0,1)
+     _,d,_=u.action(o,d,1,a,marks)
+     self.assertTrue(u.unique(o,d))
+     for j,m in enumerate(marks):self.assertLessEqual(math.dist(d[j],o[m]),3)
+ def test_recorded_fixed_marks_and_calculator_proximity(self):
+  import json
+  from pathlib import Path
+  path=Path('outputs_dev/v3/games.json')
+  if not path.exists():self.skipTest('v3 validation not generated')
+  for game in json.loads(path.read_text()):
+   o,d=u.start_positions(game['seed']);marks=u.assign_marks(o,d)
+   for h in game['history']:
+    self.assertEqual(h['marks'],marks)
+    if game['defense']=='Calculator' and h['side']==1:
+     self.assertTrue(all(math.dist(h['d'][j],h['o'][m])<=3 for j,m in enumerate(marks)))
+    if h.get('throw_result')=='caught':
+     r=h['o'].index(h['receiver']);marks=[r if m==0 else 0 if m==r else m for m in marks]
