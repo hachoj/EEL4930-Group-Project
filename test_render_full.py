@@ -37,13 +37,23 @@ class BroadcastTests(unittest.TestCase):
                 self.assertNotEqual(h['team'],prev['team'])
                 self.assertEqual(h['point'],prev['point']+1)
 
-    def test_highlights_include_all_finishes_and_pulls_under_90(self):
+    def test_calm_highlights_goals_pulls_and_budget(self):
         schedule=r.broadcast_schedule(self.rows,12)
         shown={h['turn'] for kind,h,prev,n in schedule if kind=='play'}
-        ends={h['turn'] for h in self.rows if h['goal'] or h.get('throw_result') in ('drop','interception')}
+        ends={h['turn'] for h in self.rows if h['goal']}
         self.assertTrue(ends<=shown)
-        self.assertLess(sum(n for _,_,_,n in schedule)/30,90)
+        self.assertLess(sum(n for _,_,_,n in schedule)/30,150)
         self.assertEqual(sum(kind=='pull' for kind,_,_,_ in schedule),1+sum(h['goal'] for h in self.rows[:-1]))
+
+    def test_pacing_and_audio(self):
+        schedule=r.broadcast_schedule(self.rows,None)
+        self.assertTrue(all(n==45 for kind,h,prev,n in schedule if kind=='hold'))
+        self.assertTrue(all(n>=21 for kind,h,prev,n in schedule if kind=='play'))
+        self.assertEqual(sum(kind=='set' for kind,_,_,_ in schedule),1+sum(h['goal'] for h in self.rows[:-1]))
+        audio=r.generated_audio(schedule[:3])
+        self.assertGreater(np.max(abs(audio)),0)
+        self.assertLessEqual(np.max(abs(audio)),.65)
+        self.assertEqual(len(audio),round(sum(n for _,_,_,n in schedule[:3])*44100/30))
 
     def test_unknown_llm_modes_supported(self):
         g=dict(self.game);g['history']=[dict(h,coach='LLM') for h in self.game['history'][:6]]

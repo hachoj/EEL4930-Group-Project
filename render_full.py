@@ -86,38 +86,73 @@ def absolute_records(g):
     return result
 
 
-def broadcast_schedule(rows,highlights):
-    """All scoring/turnover finishes, all pulls; routine play elided in highlights."""
-    schedule=[('title',None,None,60)]
-    ends=[i for i,h in enumerate(rows) if h['goal'] or h.get('throw_result') in ('drop','interception')]
-    if highlights is None:selected=set(range(len(rows)))
-    else:
-        # N is the maximum approach window, not an exclusion of long possessions.
-        selected=set()
-        for i in ends:
-            start=max(0,i-min(highlights,4)+1)
-            selected.update(range(start,i+1))
-    pulls=1+sum(h['goal'] for h in rows[:-1])
-    # Budget replays + pulls first, then distribute the remaining frames.
-    replay_count=sum(h['goal'] or h.get('throw_result')=='interception' for h in rows)
-    fixed=120+pulls*24+replay_count*18
-    steps=12 if highlights is None else max(2,min(10,(2580-fixed)//max(1,len(selected))))
-    if highlights is not None and fixed+len(selected)*steps>2670:
-        selected=set(ends);steps=max(1,(2670-fixed)//len(selected))
-    for i,h in enumerate(rows):
-        prev=rows[i-1] if i else None
-        if i==0 or prev['goal']:schedule.append(('pull',h,prev,24 if highlights is not None else 45))
-        if i not in selected:continue
-        schedule.append(('play',h,prev,steps))
-        if h['goal'] or h.get('throw_result')=='interception':schedule.append(('replay',h,prev,18 if highlights is not None else 42))
-    schedule.append(('final',rows[-1],None,60));return schedule
+def broadcast_schedule(rows,highlights,max_seconds=150):
+    """Calm event coverage; budget removes approach turns, then extra interceptions.
+
+    Never accelerate action to meet a budget. Goals and pulls are mandatory;
+    reject budgets too small for them. Full mode ignores the highlight budget.
+    """
+    goals={i for i,h in enumerate(rows) if h['goal']}
+    interceptions={i for i,h in enumerate(rows) if h.get('throw_result')=='interception'}
+    selected=set(range(len(rows))) if highlights is None else goals|interceptions
+    if highlights is not None:
+        for i in goals:
+            for j in range(max(0,i-min(highlights,4)+1),i):
+                if rows[j]['point']==rows[i]['point']:selected.add(j)
+    def build():
+        schedule=[('title',None,None,60)]
+        for i,h in enumerate(rows):
+            prev=rows[i-1] if i else None
+            if i==0 or prev['goal']:
+                schedule.extend([('pull',h,prev,30),('set',h,None,30)])
+            if i not in selected:continue
+            schedule.append(('play',h,prev,30 if h.get('receiver') else 21))
+            if h['goal'] or h.get('throw_result') in ('drop','interception'):
+                schedule.append(('hold',h,None,45))
+            if h['goal']:schedule.append(('replay',h,prev,30))
+        schedule.append(('final',rows[-1],None,60))
+        return schedule
+    if highlights is not None:
+        # Keep the final approach nearest each goal for as long as the budget permits.
+        optional=sorted(selected-goals-interceptions)
+        for i in optional+sorted(interceptions):
+            if sum(n for _,_,_,n in build())<=max_seconds*30:break
+            selected.remove(i)
+        if sum(n for _,_,_,n in build())>max_seconds*30:
+            raise ValueError('max-seconds too small for calm goals and pulls')
+    return build()
 
 
-def video(g,out,n):
+def generated_audio(schedule,rate=44100):
+    """Deterministic, modest mono effects: vibrato whistles, crowd, disc air."""
+    rng=np.random.default_rng(731);audio=np.zeros(round(sum(n for _,_,_,n in schedule)*rate/30),dtype=np.float32)
+    cursor=0
+    def add(start,duration,kind,gain):
+        t=np.arange(round(duration*rate))/rate
+        if kind=='whistle':
+            phase=2*np.pi*3000*t+5*np.sin(2*np.pi*24*t)
+            signal=np.sin(phase)*(.65+.35*np.sin(2*np.pi*35*t))
+        else:
+            noise=rng.standard_normal(len(t));smooth=np.convolve(noise,np.ones(23)/23,mode='same')
+            signal=smooth if kind=='crowd' else np.convolve(noise,np.ones(7)/7,mode='same')
+            signal/=max(np.std(signal),1e-6)
+        signal=signal*np.sin(np.pi*t/duration)**2*gain
+        at=round(start*rate);end=min(len(audio),at+len(signal));audio[at:end]+=signal[:end-at]
+    for kind,h,prev,n in schedule:
+        if kind=='set':add(cursor/30,.6,'whistle',.12)
+        if kind=='hold':add(cursor/30,1.5 if h['goal'] else .6,'crowd' if h['goal'] else 'whistle',.10 if h['goal'] else .055)
+        if kind=='play' and h.get('receiver') and np.linalg.norm(np.array(h['receiver'])-h['thrower'])>=6:add(cursor/30,.8,'whoosh',.035)
+        cursor+=n
+    peak=max(abs(audio).max(),1e-8)
+    audio*=min(1,.65/peak)
+    return audio
+
+
+def video(g,out,n,max_seconds=150,no_audio=False):
     """Render broadcast frames with Pillow and stream directly to H.264."""
     from PIL import Image, ImageDraw, ImageFont
     import subprocess, math
-    rows=absolute_records(g);schedule=broadcast_schedule(rows,n)
+    rows=absolute_records(g);schedule=broadcast_schedule(rows,n,max_seconds)
     W,H=1920,1080;bg='#0b1927';white='#f2f6fa';gold='#ffe17d'
     font_path='/System/Library/Fonts/Supplemental/Arial.ttf'
     if not Path(font_path).exists():font_path='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
@@ -133,7 +168,15 @@ def video(g,out,n):
     for x in range(480,1520,80):d.line((x,263,x,278),fill='#afc4b9',width=2);d.line((x,882,x,897),fill='#afc4b9',width=2)
     text(d,(960,1000),'ULTIMATE  /  FULL GAME BROADCAST',24,fill='#829bac')
     snapshots={};frame_index=0
-    cmd=['ffmpeg','-y','-loglevel','error','-f','rawvideo','-vcodec','rawvideo','-pix_fmt','rgb24','-s','1920x1080','-r','30','-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart','-map_metadata','-1',str(out)]
+    cmd=['ffmpeg','-y','-loglevel','error','-f','rawvideo','-vcodec','rawvideo','-pix_fmt','rgb24','-s','1920x1080','-r','30','-i','-','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart','-map_metadata','-1',str(out)]
+    import tempfile, wave
+    audio_file=None
+    if not no_audio:
+        audio_file=tempfile.NamedTemporaryFile(suffix='.wav',dir=out.parent)
+        samples=generated_audio(schedule)
+        with wave.open(audio_file.name,'wb') as wav:
+            wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(44100);wav.writeframes((samples*32767).astype('<i2').tobytes())
+        idx=cmd.index('-c:v');cmd[idx:idx]=['-i',audio_file.name,'-c:a','aac','-b:a','128k']
     proc=subprocess.Popen(cmd,stdin=subprocess.PIPE)
     def arc(a,b,t):
         a=np.array(xy(a));b=np.array(xy(b));v=b-a
@@ -142,7 +185,7 @@ def video(g,out,n):
     try:
         for kind,h,prev,count in schedule:
             for k in range(count):
-                t=(k+1)/count;s=t*t*(3-2*t);im=base.copy();d=ImageDraw.Draw(im)
+                t=1.0 if kind in ('hold','set') else (.5+.5*(k+1)/count if kind=='replay' else (k+1)/count);s=t*t*(3-2*t);im=base.copy();d=ImageDraw.Draw(im)
                 if kind in ('title','final'):
                     d.rectangle((0,0,W,H),fill=bg)
                     text(d,(960,230),'ULTIMATE',80);text(d,(960,335),'FULL GAME BROADCAST',32,fill=gold)
@@ -160,7 +203,7 @@ def video(g,out,n):
                     # Score bug and permanent camera; only the attack arrow reverses.
                     for team,x in ((0,160),(1,1000)):
                         d.rounded_rectangle((x,60,x+760,155),radius=12,fill=COLORS[team]);text(d,(x+290,106),g['teams'][team],36);text(d,(x+670,106),str(h['score'][team]),56)
-                    receiving=1-active if is_turn and kind=='play' and t>.75 else active
+                    receiving=1-active if is_turn and kind in ('play','hold') and t>.75 else active
                     attack=-direction if receiving!=active else direction
                     text(d,(960,205),f"POINT {h['point']}    |    {g['teams'][receiving]} BALL   {'→' if attack>0 else '←'}",32)
                     players=h['players']
@@ -186,7 +229,7 @@ def video(g,out,n):
                         a=h['thrower'];b=h.get('receiver');disc=np.array(xy(a))
                         if b:
                             pts=[tuple(arc(a,b,z)) for z in np.linspace(0,1,35)];d.line(pts,fill='#d9bc64',width=3)
-                            flight=min(1,t*1.2);landing=h.get('turnover_spot',b) if h.get('throw_result')=='interception' else b;disc=arc(a,landing,flight)
+                            flight=t;landing=h.get('turnover_spot',b) if h.get('throw_result')=='interception' else b;disc=arc(a,landing,flight)
                             for lag in (.06,.12,.18):
                                 p=arc(a,landing,max(0,flight-lag));r=max(2,6-lag*20);d.ellipse((p[0]-r,p[1]-r,p[0]+r,p[1]+r),fill='#bdc9bd')
                             text(d,(960,950),f"CATCH CHANCE {h['p']:.0%}   •   {h.get('throw_result','').upper()}",28)
@@ -204,12 +247,13 @@ def video(g,out,n):
                         d.rounded_rectangle((430,305,1490,375),radius=10,fill=bg);text(d,(960,340),banner,36,fill=gold)
                         if kind=='replay':text(d,(1680,238),'SLOW REPLAY',20,fill=gold)
                 proc.stdin.write(im.tobytes())
-                snap=kind if kind in ('title','pull','final') else 'goal_replay' if kind=='replay' and h['goal'] else 'turnover' if kind=='play' and is_turn and t>.8 else None
+                snap=('interception_hold_start' if k==0 else 'interception_hold_end' if k==30 else None) if kind=='hold' and h.get('throw_result')=='interception' else kind if kind in ('title','pull','final') else 'goal_replay' if kind=='replay' and h['goal'] else 'turnover' if kind=='play' and is_turn and t>.8 else None
                 if snap and snap not in snapshots and (kind not in ('pull','replay') or t>.5):
                     snapshots[snap]={'frame':frame_index,'seconds':frame_index/30}
                 frame_index+=1
         proc.stdin.close()
         if proc.wait()!=0:raise RuntimeError('ffmpeg encoding failed')
+        if audio_file:audio_file.close()
     except BaseException:
         proc.kill();proc.wait();raise
     # These are actual decoded MP4 frames, not source drawings.
@@ -217,7 +261,7 @@ def video(g,out,n):
         path=out.with_name(out.stem+'_'+name+'.png')
         subprocess.run(['ffmpeg','-y','-loglevel','error','-ss',str(entry['seconds']),'-i',str(out),'-frames:v','1',str(path)],check=True)
         entry['path']=str(path)
-    info={'seconds':frame_index/30,'frames':frame_index,'resolution':'1920x1080','fps':30,'snapshots':snapshots}
+    info={'seconds':frame_index/30,'frames':frame_index,'resolution':'1920x1080','fps':30,'audio':not no_audio,'snapshots':snapshots}
     out.with_suffix('.json').write_text(json.dumps(info,indent=2));return info
 
 def figures(games,out):
@@ -250,10 +294,15 @@ def figures(games,out):
     (out/'figure_stats.json').write_text(json.dumps(stats,indent=2))
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('histories',nargs='+',type=Path);p.add_argument('--game-index',type=int,default=0);p.add_argument('--highlights',type=int,metavar='N');p.add_argument('--out',type=Path,default=Path('outputs_dev/v7/media'));p.add_argument('--figures',action='store_true');p.add_argument('--video',action='store_true');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('histories',nargs='+',type=Path);p.add_argument('--game-index',type=int,default=0);p.add_argument('--highlights',type=int,metavar='N');p.add_argument('--out',type=Path,default=Path('outputs_dev/v7/media'));p.add_argument('--figures',action='store_true');p.add_argument('--video',action='store_true');p.add_argument('--no-audio',action='store_true');p.add_argument('--max-seconds',type=float,default=150);p.add_argument('--model',choices=['haiku','opus'],help='Model used by legacy LLM histories (which omit model metadata)');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     games=[g for path in a.histories for g in json.loads(path.read_text())]
+    for g in games:
+        if 'LLM' in g['teams']:
+            model=g.get('model') or a.model
+            if not model:p.error('LLM history omits model; supply the run model with --model haiku|opus')
+            g['teams']=[model.title() if t=='LLM' else t for t in g['teams']]
     if a.figures:figures(games,a.out)
     if a.video or not a.figures:
         g=games[a.game_index];name='_vs_'.join(g['teams'])+f'_game{a.game_index}'+('_highlights' if a.highlights is not None else '')
-        print(json.dumps(video(g,a.out/(name+'.mp4'),a.highlights),indent=2))
+        print(json.dumps(video(g,a.out/(name+'.mp4'),a.highlights,a.max_seconds,a.no_audio),indent=2))
 if __name__=='__main__':main()
