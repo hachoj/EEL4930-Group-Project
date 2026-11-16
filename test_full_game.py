@@ -148,3 +148,73 @@ class TurnoverIntegration(unittest.TestCase):
             with tempfile.TemporaryDirectory() as td,patch.object(f.subprocess,'run',return_value=result):
                 x,y,r,m,n=f.llm(o,d,1,0,3,[0,1,2],'haiku',Path(td))
                 self.assertTrue(u.unique(x,y));self.assertEqual(n,1)
+
+class ReadablePrompt(unittest.TestCase):
+    def test_joint_options_equal_realized_llm_moves_and_probabilities(self):
+        # B and C can target the same cell: collision corrections must match parser.
+        o=[[2,2],[4,6],[6,6]];d=[[1,3],[1,8],[8,8]];marks=u.assign_marks(o,d)
+        prompt,menu=f.render_llm_prompt(o,d,0,1,3,marks,[2,4])
+        _,outcomes=f.offense_menu(o,d)
+        self.assertNotIn('current_p_catch',prompt)
+        self.assertIn('Joint move_B=',prompt)
+        with tempfile.TemporaryDirectory() as td:
+            for b,ci in f.itertools.product(f.j.INTENTS,repeat=2):
+                answer=dict(move_B=b,move_C=ci,action='throw_B')
+                result=SimpleNamespace(stdout=json.dumps({'result':json.dumps(answer)}))
+                # Distinct model cache keys ensure every joint option hits the mocked CLI.
+                with patch.object(f.subprocess,'run',return_value=result):
+                    x,y,r,m,n=f.llm(o,d,0,1,3,marks,b+ci,Path(td))
+                expected=outcomes[b,ci]
+                self.assertEqual(x,expected['o'])
+                for r,label in ((1,'B'),(2,'C')):
+                    p,fail=f.throw_model(np.array(x)[None],np.array(y)[None],r)
+                    v=expected['throws'][label]
+                    self.assertEqual(v['p_catch'],float(p[0]))
+                    self.assertEqual(v['drop'],float(fail[0,0]))
+                    self.assertEqual(v['interception'],float(fail[0,1:].sum()))
+            # Check the numeric text actually shown, including correction rows.
+        import re
+        for line in prompt.splitlines():
+            match=re.search(r'(B|C) (\w+) -> (\[[^]]+\]) \| ([\d.]+) / ([\d.]+) / ([\d.]+)',line)
+            if not match:continue
+            label,intent,position,pc,pd,pi=match.groups()
+            joint=re.search(r'Joint move_B=(\w+), move_C=(\w+)',line)
+            key=tuple(joint.groups()) if joint else ((intent,'stay') if label=='B' else ('stay',intent))
+            v=outcomes[key]['throws'][label]
+            self.assertEqual(json.loads(position),outcomes[key]['o']['ABC'.index(label)])
+            np.testing.assert_allclose([float(pc),float(pd),float(pi)],[v['p_catch'],v['drop'],v['interception']],atol=5e-7,rtol=0)
+
+    def test_mocked_llm_full_game_and_logged_choices(self):
+        def cli(args,**kwargs):
+            prompt=args[-1]
+            if 'you coach OFFENSE' in prompt:
+                answer=dict(move_B='N',move_C='N',action='throw_C')
+            else:answer=dict(D1='tight_front',D2='poach_lane',D3='double_C')
+            return SimpleNamespace(stdout=json.dumps({'result':json.dumps(answer)}))
+        with tempfile.TemporaryDirectory() as td,patch.object(f.subprocess,'run',side_effect=cli) as call:
+            g=f.game('LLM','LLM',1700,None,target=10,safety_cap=3000,out=Path(td))
+        self.assertTrue(g['finished']);self.assertFalse(g['safety_cap_triggered'])
+        self.assertGreater(call.call_count,0)
+        for h in g['history']:
+            names=h['action_names']
+            if h['side']==0:
+                self.assertEqual(names['intents'],{'B':'N','C':'N'})
+                self.assertEqual(names['action'],'throw_C')
+            else:self.assertEqual(names['modes']['D3'],'double_C')
+
+    def test_all_coaches_log_actions(self):
+        o,d=u.start_positions(42,0);marks=u.assign_marks(o,d)
+        for side in (0,1):
+            info={};f.scripted(o,d,side,0,3,marks,info)
+            self.assertIn('intents' if side==0 else 'modes',info)
+            s=f.Solver.__new__(f.Solver);s.n=len(u.KEYS);s.max_hold=3;s.gamma=.97;s.V=np.zeros((3,2,s.n))
+            s.concrete(o,d,side,0,marks)
+            self.assertIn('intents' if side==0 else 'modes',s.last_action)
+
+    def test_prompt_defense_modes_and_forced_status(self):
+        o,d=u.start_positions(42,0)
+        prompt,_=f.render_llm_prompt(o,d,1,2,3,[0,1,2],[5,2],10,{'modes':{'D1':'double_B'}})
+        self.assertIn('FORCED THROW',prompt)
+        self.assertIn('last chosen mode: double_B',prompt)
+        for mode in f.MODES:self.assertIn(mode,prompt)
+        self.assertIn('switch_D2',prompt)

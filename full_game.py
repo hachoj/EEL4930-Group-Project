@@ -161,6 +161,7 @@ class Solver:
                 if r==0 and c==self.max_hold-1:continue
                 vs[mask]=self.evaluate(xx[mask],yy[mask],r,ms[mask],c,side)
             a=max(range(count),key=lambda a:(vs[a],sum(xx[a,1:,1]),np.count_nonzero((xx[a]!=oo[0]).any(1))))
+            self.last_action=dict(action=['hold','throw_B','throw_C'][int(intents[a,2])],intents={'B':j.INTENTS[intents[a,0]],'C':j.INTENTS[intents[a,1]]})
             return xx[a].tolist(),yy[a].tolist(),int(intents[a,2]),marks[:]
         # Batch all joint defenses for a single concrete state.
         count=len(DEF_ACTIONS);xx=np.repeat(oo,count,0);dd=np.repeat(dd,count,0);ms=np.repeat(mm,count,0);proposed=dd.copy()
@@ -171,15 +172,19 @@ class Solver:
             for k in range(3):proposed[indices,k]=np.array(props[k])[:,0][modes[:,k]]
         xx,yy=j.resolve_batch(xx,dd,1,proposed)
         a=int(self.evaluate(xx,yy,0,ms,c,side).argmin())
+        pair,modes=DEF_ACTIONS[a]
+        self.last_action=dict(modes={f'D{k+1}':MODES[v] for k,v in enumerate(modes)},switch=list(pair) if pair else None)
         return xx[a].tolist(),yy[a].tolist(),0,ms[a].tolist()
 
-def scripted(o,d,side,c,max_hold,marks):
+def scripted(o,d,side,c,max_hold,marks,action_info=None):
     if side==0:
         x,y,_=u.scripted_cut(o,d);targets=[r for r in (1,2) if x[r][1]>x[0][1]]
         probs={r:float(throw_model(np.array(x)[None],np.array(y)[None],r)[0][0]) for r in (1,2)}
         r=max(targets,key=probs.get) if targets else 0
         if c==max_hold-1:r=max((1,2),key=probs.get)
         elif not r or probs[r]<.65:r=0
+        if action_info is not None:
+            action_info.update(action=['hold','throw_B','throw_C'][r],intents={'B':'scripted_cut','C':'scripted_cut'})
         return x,y,r,marks[:]
     pair=None
     # Crossing assignments: accept nearest bijection only for a close pair that improves cost.
@@ -195,22 +200,87 @@ def scripted(o,d,side,c,max_hold,marks):
         modes.append(mode)
     proposed=np.array([[props[k][mode][0] for k,mode in enumerate(modes)]])
     x,y=j.resolve_batch(np.array(o)[None],np.array(d)[None],1,proposed)
+    if action_info is not None:action_info.update(modes={f'D{k+1}':MODES[v] for k,v in enumerate(modes)},switch=list(pair) if pair else None)
     return x[0].tolist(),y[0].tolist(),0,mm[0].tolist()
 
-def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10):
+def offense_menu(o,d):
+    """Exact post-resolution joint outcomes; base rows assume other receiver stays."""
+    oo=np.array(o)[None];dd=np.array(d)[None];props=j.proposals(oo,dd)
+    menu={label:{name:props[k][i][0].tolist() for i,name in enumerate(j.INTENTS)} for k,label in enumerate(('B','C'))}
+    outcomes={}
+    for b,ci in itertools.product(j.INTENTS,repeat=2):
+        proposed=np.array([[o[0],menu['B'][b],menu['C'][ci]]])
+        x,y=j.resolve_batch(oo,dd,0,proposed)
+        outcomes[b,ci]=dict(o=x[0].tolist(),throws={})
+        for r,label in enumerate(('B','C'),1):
+            p,fail=throw_model(x,y,r)
+            outcomes[b,ci]['throws'][label]=dict(p_catch=float(p[0]),drop=float(fail[0,0]),interception=float(fail[0,1:].sum()))
+    return menu,outcomes
+
+def defense_menu(o,d,marks):
     oo=np.array(o)[None];dd=np.array(d)[None];mm=np.array(marks)[None]
+    props=defense_props(oo,dd,mm)
+    menu={f'D{k+1}':{name:props[k][i][0].tolist() for i,name in enumerate(MODES)} for k in range(3)}
+    for pair in itertools.combinations(range(3),2):
+        ps=j.defense_proposals(oo,dd,remap_marks(mm,pair))
+        for k in pair:menu[f'D{k+1}'][f'switch_D{pair[1]+1 if k==pair[0] else pair[0]+1}']=ps[k][0][0].tolist()
+    return menu
+
+def render_llm_prompt(o,d,side,c,max_hold,marks,score=None,target=10,defense_info=None,team=None):
+    """Readable decision information computed with the concrete game's functions."""
+    lines=[f'Ultimate Frisbee: you coach {"OFFENSE" if side==0 else "DEFENSE"}.',
+        "Maximize your team's point differential; turnovers give the opponent the disc at that spot.",
+        f'You control team {team if team is not None else chr(63)}. Score (team 0, team 1): {score if score is not None else [0,0]}; target {target}.',
+        'Field: x=0..9, y=0..19; each square is 5 yards. Offense attacks +y (N); a catch in rows 17..19 scores.',
+        f'A holds the disc at {o[0]}, {max(0,17-o[0][1])} rows from the scoring endzone; A cannot move.',
+        f'B is at {o[1]}; C is at {o[2]}. Letters are current roles; the catcher becomes A.',
+        f'Hold counter {c} of 0..{max_hold-1}: offensive turn {c+1} since gaining the disc; throw required on turn {max_hold}. '+('FORCED THROW: hold is illegal.' if c==max_hold-1 else 'Hold is legal.'),
+        'Turns alternate: offense moves both receivers, then holds or throws; defense moves all defenders on its own turn.',
+        'Moves are at most one square including diagonals. Blocked moves stay; collisions resolve B then C, or D1 then D2 then D3.',
+        f'After catches the marker seals the holder\'s left. Listed probabilities include break multiplier {u.force.BREAK_MULTIPLIER}.',
+        'Defenders near the throwing segment add interception risk, beyond receiver pressure. Failure risks below are unconditional and sum with catch to 1.',
+        'Drops/incompletions give the opponent the disc at the receiver; interceptions give it at the intercepting defender. Coordinates then rotate 180 degrees.',
+        'On an offensive turnover, the current defense becomes offense and attacks -y in these coordinates: a turnover at row y leaves the new offense y-2 rows from its scoring endzone (zero if y<=2).']
+    for k in range(3):
+        label=f'D{k+1}';mode=(defense_info or {}).get('modes',{}).get(label,'unknown (initial setup or no recorded action)')
+        lines.append(f'{label} at {d[k]} marks {"ABC"[marks[k]]}; last chosen mode: {mode}. If this defender intercepts here, the current defense gains the disc {max(0,d[k][1]-2)} rows from its scoring endzone.')
     if side==0:
-        opts=j.proposals(oo,dd)
-        menu={label:{name:opts[k][i][0].tolist() for i,name in enumerate(j.INTENTS)} for k,label in enumerate(('B','C'))}
+        menu,outcomes=offense_menu(o,d)
+        lines+=['Receiver options: stay, SW, W, NW, S, N, SE, E, NE, get_open (most separation with slight +y preference). Direction names are intents: each chooses the closest legal neighboring move; use the listed resulting square.',
+            'Base table: the OTHER receiver chooses stay. Each row is intent -> resulting square | catch / drop / interception probabilities | turnover consequence.']
+        def row(label,intent,result):
+            r='ABC'.index(label);q=result['o'][r];v=result['throws'][label]
+            return f'{label} {intent} -> {q} | {v["p_catch"]:.6f} / {v["drop"]:.6f} / {v["interception"]:.6f} | drop gives them disc {max(0,q[1]-2)} rows from their endzone'+(' | catch SCORES' if q[1]>=17 else '')
+        for label in ('B','C'):
+            for intent in j.INTENTS:lines.append(row(label,intent,outcomes[(intent,'stay') if label=='B' else ('stay',intent)]))
+        lines.append('Joint corrections below override base rows when both receivers choose moves that collide; all unlisted joint choices have exactly the base outcomes (other-receiver movement has no other effect on throw probability).')
+        corrections=0
+        for (b,ci),result in outcomes.items():
+            for label,r,base in [('B',1,outcomes[b,'stay']),('C',2,outcomes['stay',ci])]:
+                if result['o'][r]!=base['o'][r]:
+                    lines.append(f'Joint move_B={b}, move_C={ci}: '+row(label,b if label=='B' else ci,result));corrections+=1
+        if not corrections:lines.append('No joint corrections for this state.')
+        lines.append('Hold: move receivers with no immediate throw risk, keep disc at A, increment counter; defense acts next. A catch resets the counter. '+('ILLEGAL now.' if c==max_hold-1 else f'{max_hold-1-c} hold(s) remain before a forced throw.'))
         example={'move_B':'N','move_C':'get_open','action':'throw_B'}
+        lines.append('Choose move_B and move_C from the named intents; action is throw_B, throw_C'+(', or hold.' if c<max_hold-1 else '.'))
     else:
-        props=defense_props(oo,dd,mm)
-        menu={f'D{k+1}':{name:props[k][i][0].tolist() for i,name in enumerate(MODES)} for k in range(3)}
-        for pair in itertools.combinations(range(3),2):
-            ps=j.defense_proposals(oo,dd,remap_marks(mm,pair))
-            for k in pair:menu[f'D{k+1}'][f'switch_D{pair[1] + 1 if k==pair[0] else pair[0]+1}']=ps[k][0][0].tolist()
+        menu=defense_menu(o,d,marks)
+        descriptions=dict(tight_front='move toward thrower side of own mark; give up rear space',tight_behind='move behind own mark; give up front space',trail='follow current side of own mark; give up opposite side',poach_lane='leave own mark for midpoint of mark-to-holder lane; give up tight coverage',poach_deep='leave own mark to guard deep space in front of endzone; give up short coverage',double_B='leave own mark to double B; give up own assignment',double_C='leave own mark to double C; give up own assignment')
+        lines.append('Per-defender proposed destinations (other defenders assumed to stay; joint collisions may cause a stay):')
+        for k in range(3):
+            for mode,q in menu[f'D{k+1}'].items():
+                explanation=descriptions.get(mode)
+                if explanation is None:
+                    partner=int(mode[-1])-1
+                    explanation=f'swap marks with D{partner+1}, then tight_front on {"ABC"[marks[partner]]}; give up current assignment; partner must choose switch_D{k+1}'
+                lines.append(f'D{k+1} {mode} -> {q}: {explanation}.')
+        lines.append('Switch choices must be reciprocal; one reciprocal pair maximum. Other defenders can choose any listed mode.')
         example={'D1':'tight_front','D2':'poach_lane','D3':'tight_behind'}
-    prompt=json.dumps(dict(task='Play full Ultimate to 10; maximize your team point differential. JSON only.',rules='Offense always attacks +y; catch y>=17 scores. Holder cannot move. Incompletion flips possession at receiver, interception at defender. Forced throw on Kth offensive turn since catch. Defender switches must be reciprocal; they swap marks. Poach leaves mark for lane/deep; double_B/double_C leave mark for that receiver. Listed positions resolve collision by staying. After catch force flick seals left.',score=score,target=target,current_p_catch={str(r):float(throw_model(oo,dd,r)[0][0]) for r in (1,2)},o=o,d=d,marks=marks,side=side,hold_counter=c,max_hold=max_hold,legal_actions=['throw_B','throw_C']+(['hold'] if c<max_hold-1 else []),options=menu,example=example))
+    lines.append('Return only named-field JSON, for example: '+json.dumps(example))
+    return '\n'.join(lines),menu
+
+def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10,action_info=None,defense_info=None,team=None):
+    prompt,menu=render_llm_prompt(o,d,side,c,max_hold,marks,score,target,defense_info,team)
     cache=out/'cache';cache.mkdir(parents=True,exist_ok=True);f=cache/(hashlib.sha256((model+prompt).encode()).hexdigest()+'.json')
     calls=0
     for attempt in range(2):
@@ -232,22 +302,31 @@ def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10):
                         partner=int(token[-1])-1
                         if partner==k or answer[f'D{partner+1}']!=f'switch_D{k+1}':raise ValueError('nonreciprocal switch')
                         m[k]=marks[partner]
+            if action_info is not None:
+                if side==0:action_info.update(action=answer['action'],intents={label:answer['move_'+label] for label in ('B','C')})
+                else:
+                    pairs=[(k,int(answer[f'D{k+1}'][-1])-1) for k in range(3) if answer[f'D{k+1}'].startswith('switch_D')]
+                    action_info.update(modes={f'D{k+1}':answer[f'D{k+1}'] for k in range(3)},switch=list(pairs[0]) if pairs else None)
             x,y=u.resolve(x,y,side,o,d);tmp=f.with_suffix(f'.{os.getpid()}.tmp');tmp.write_text(json.dumps(answer));tmp.replace(f);return x,y,r,m,calls
         except (ValueError,KeyError,TypeError,AttributeError):
             if f.exists():f.unlink()
-    return (*scripted(o,d,side,c,max_hold,marks),calls)
+    return (*scripted(o,d,side,c,max_hold,marks,action_info),calls)
 
 def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='haiku',out=Path('outputs_dev/v7'),first=0):
     rng=random.Random(seed);teams=[team0,team1];active=first;o,d=u.start_positions(seed,0);marks=u.assign_marks(o,d)
     scores=[0,0];history=[];possessions=[];c=0;side=0;beg=0;throws=0;caught=0;calls=0;pos_throws=0;pos_caught=0;start_spot=o[0][:]
+    defense_info=None
     for turn in range(safety_cap):
+        action_info={}
         coach=teams[active if side==0 else 1-active]
-        if coach=='Calculator':x,y,r,m=solver.concrete(o,d,side,c,marks)
-        elif coach=='Scripted':x,y,r,m=scripted(o,d,side,c,max_hold,marks)
+        if coach=='Calculator':
+            x,y,r,m=solver.concrete(o,d,side,c,marks);action_info.update(getattr(solver,'last_action',{}))
+        elif coach=='Scripted':x,y,r,m=scripted(o,d,side,c,max_hold,marks,action_info)
         else:
-            x,y,r,m,ncalls=llm(o,d,side,c,max_hold,marks,model,out,scores,target);calls+=ncalls
+            x,y,r,m,ncalls=llm(o,d,side,c,max_hold,marks,model,out,scores,target,action_info,defense_info,active if side==0 else 1-active);calls+=ncalls
         if side==0 and c==max_hold-1 and not r:raise RuntimeError('illegal forced hold')
-        rec=dict(turn=turn+1,side=side,team=active,coach=coach,hold_counter=c,o=x,d=y,marks=m,thrower=o[0],receiver=x[r] if r else None)
+        if side==1:defense_info=action_info.copy()
+        rec=dict(action_names=action_info,turn=turn+1,side=side,team=active,coach=coach,hold_counter=c,o=x,d=y,marks=m,thrower=o[0],receiver=x[r] if r else None)
         o,d,marks=x,y,m;event=None;spot=None;interceptor=None
         if r:
             throws+=1;pos_throws+=1;p,fail=throw_model(np.array(o)[None],np.array(d)[None],r);p=float(p[0]);rec['p']=p
@@ -266,6 +345,7 @@ def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='ha
             if max(scores)>=target:break
             if event=='score':o,d=u.start_positions(seed+len(possessions),0);marks=u.assign_marks(o,d)
             else:o,d,marks=flip(o,d,spot,interceptor)
+            defense_info=None
             active=1-active;side=0;c=0;pos_throws=0;pos_caught=0;start_spot=o[0][:]
         else:side=1-side
     return dict(teams=teams,seed=seed,first=first,score=scores,finished=max(scores)>=target,safety_cap_triggered=max(scores)<target,turns=len(history),throws=throws,completed=caught,llm_calls=calls,llm_decisions=sum(h['coach']=='LLM' for h in history),possessions=possessions,history=history)
