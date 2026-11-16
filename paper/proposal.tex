@@ -4,9 +4,12 @@
 \usepackage{cite}
 \usepackage{url}
 
+% Bullet-point skeleton: each section lists what to say, with our real numbers.
+% Rewrite each list as prose in your own words.
+
 \begin{document}
 
-\title{Solved Playbook or Frontier Model? Abstraction-Based Strategy Synthesis versus an LLM in 3v3 Ultimate Frisbee}
+\title{Solved Playbook or Language Model? Abstraction-Based Strategy Synthesis versus an LLM Coach in 3v3 Ultimate Frisbee}
 
 \author{\IEEEauthorblockN{TEAM MEMBER 1, TEAM MEMBER 2, TEAM MEMBER 3}
 \IEEEauthorblockA{EEL4930, University of Florida\\
@@ -15,82 +18,123 @@
 \maketitle
 
 \begin{abstract}
-We build a simplified, stochastic 3v3 Ultimate Frisbee game whose state space is too large to solve exactly, and use it to compare three ``coaches'': (i) a formal-methods coach that solves an abstracted version of the game exactly and plays the resulting strategy in the full game, (ii) a large language model (Claude Opus) that reads the full, unabstracted state as text, and (iii) a scripted baseline. Throw success probabilities are derived from professional Ultimate Frisbee Association (UFA) data and degraded by defender position. We evaluate win rate, turnover rate, and how far each coach's moves deviate from the abstract optimum, and we measure how well the abstract game's guaranteed value predicts real performance.
+\begin{itemize}
+\item Turn-based, stochastic 3v3 Ultimate game; too large to solve exactly ($\sim10^{13}$ concrete positions).
+\item Three coaches: Calculator (solves an abstraction exactly, plays it in the real game), LLM (Claude reads the full state as text), Scripted baseline.
+\item Catch odds fitted to 84,099 real 2025 UFA throws~\cite{ufa}; defensive pressure calibrated to UFA point statistics.
+\item Question: when does a provably optimal plan for a blurred model beat unconstrained reasoning over the exact state?
+\end{itemize}
 \end{abstract}
 
 \section{Introduction and Motivation}
-A central skill in formal methods is handling systems too large to analyze directly: build a smaller model that can be analyzed, compute a strategy with guarantees on that model, and carry it back to the real system. The guarantee holds only for the model, so the interesting question is how much of it survives contact with the full system.
-
-Team sports make this question concrete. A field position in Ultimate Frisbee involves six players, a disc, and uncertain throws, so the exact game is far too large to solve. Meanwhile, large language models (LLMs) can read a full description of a game state and choose plausible moves with no abstraction at all, but with no guarantees either.
-
-We pit these two philosophies against each other in a game designed so that neither side is perfect: the formal coach is exact on a blurred game, and the LLM sees the real game but may make reckless choices. The result tells us when a provably optimal strategy for a simplified model is worth more than unconstrained reasoning over the full state.
+\begin{itemize}
+\item Core formal-methods move: system too big $\rightarrow$ build a smaller model, solve it with guarantees, carry the strategy back. The guarantee holds only on the model.
+\item Team sports make the gap concrete: six players, a disc, uncertain throws.
+\item LLMs are the opposite philosophy: they see the exact state, with no abstraction and no guarantees.
+\item Our game is built so neither side is perfect: the Calculator is exact on a blurry game; the LLM sees the real game but may play badly.
+\item Why it matters: tells us when abstraction-based synthesis is worth more than general reasoning over the full state.
+\end{itemize}
 
 \section{Problem Statement}
-\textbf{Concrete game.} The field is a $10 \times 20$ grid; the last three rows are the endzone. Each team has three identical players. Turns alternate. On offense's turn, the disc holder may not move (as in real Ultimate) and either throws to a teammate or holds; the other two offensive players each move one square (8-neighborhood). On defense's turn, each defender moves one square. Each game is a single possession: offense wins if a teammate catches the disc in the endzone; defense wins on a turnover (incomplete throw) or after 30 turns.
-
-\textbf{Throw model.} A throw of distance $d$ to receiver $R$ is caught with probability
-\begin{equation}
-p_{\text{catch}} = p_{\text{UFA}}(d) \prod_{j} \bigl(1 - h_j\bigr),
-\end{equation}
-\begin{equation}
-h_j = 0.6 \cdot \max\!\Bigl(0,\, 1 - \tfrac{r_j}{3}\Bigr) \cdot \Bigl(0.25 + 0.75 \cdot \tfrac{1 + \cos\theta_j}{2}\Bigr),
-\end{equation}
-where $p_{\text{UFA}}(d)$ is the professional completion rate at distance $d$ fitted from UFA throw data~\cite{ufa}, $r_j$ is defender $j$'s distance to the receiver in squares, and $\theta_j$ is the angle at the receiver between defender $j$ and the thrower. A defender between thrower and receiver ($\theta_j \approx 0$) has the largest effect; one directly behind the receiver has a quarter of that effect; one three or more squares away has none.
-
-\textbf{Research question.} Given a turn-based stochastic game too large to solve exactly, does a strategy that is optimal for a finite abstraction outperform an LLM reasoning over the concrete state, and how well does the abstraction's computed value predict the strategy's real performance?
+\begin{itemize}
+\item \textbf{Field:} $10\times20$ grid of 5-yard squares ($50\times100$ yd); endzone rows 17--19; three identical players per team; field rotates $180^\circ$ on a change of possession so the offense always attacks up.
+\item \textbf{Turns} alternate like chess. Offense: holder cannot move (pivot); both receivers move one square (8-neighborhood) or stay; then hold, throw to B, or throw to C. Must throw by the 3rd decision (stands in for the stall count; no stall turnovers). Defense: each defender moves one square; man-to-man marks, switches allowed. No shared squares.
+\item \textbf{Force flick:} after each catch the holder's marker is placed on the holder's left (break side).
+\item \textbf{Catch model} (three multiplied layers):
+  \begin{itemize}
+  \item Distance curve $p_{\text{UFA}}(d)$ fitted to 84,099 UFA 2025 throws: 10 yd $\approx$97\%, 40 yd $\approx$83\%, 60 yd $\approx$58\%.
+  \item Receiver pressure from each defender within 3 squares: $h_j = 0.6P\max(0,1-r_j/3)\bigl(0.25+0.75\tfrac{1+\cos\theta_j}{2}\bigr)$; a defender in front hurts $4\times$ more than one behind.
+  \item Lane pressure: small extra risk for defenders on the throwing line.
+  \item One pressure knob $P=0.1$ (see calibration).
+  \end{itemize}
+\item \textbf{Turnovers:} failure from the distance layer = drop (opponent picks up at the receiver); failure from pressure = interception (picks up at that defender).
+\item \textbf{Points and games:} a catch in rows 17--19 scores; the scorer pulls, receivers pick up at rows 2--3, defenders cover 3 squares/beat for $\sim$4 beats (scripted). Games to 10; first receiver alternates.
+\item \textbf{Formal question:} the game is a two-player zero-sum turn-based stochastic game~\cite{shapley1953}. Does a strategy optimal for a finite abstraction beat an LLM over the concrete state, and how well does the abstract value predict real play?
+\end{itemize}
 
 \section{Proposed Approach}
+\subsection{Calculator: abstraction and solution}
+\begin{itemize}
+\item \textbf{Abstract state:} zone of each offensive player (3 lanes $\times$ 5 depths, endzone its own depth = 15 zones); per receiver a coverage label (nearest defender close-in-front / close-behind within 3 squares / far); hold counter; side to move. $15^3\times3^2=30{,}375$ base states $\times$ 3 hold values $\times$ 2 sides $=182{,}250$ states.
+\item Deliberately forgets exact defender squares and who marks whom: this blind spot is the thesis.
+\item \textbf{Actions:} offense 300 = 10 intents per receiver (stay, 8 directions, get-open) squared $\times$ \{hold, throw B, throw C\}. Defense 1,372 = 7 modes per defender (tight-front, tight-behind, trail, poach-lane, poach-deep, double-B, double-C) cubed $\times$ 4 switch options.
+\item \textbf{Transitions:} sample concrete positions per abstract state (4 samples), simulate every action in the real model, record abstract successors $\rightarrow$ sparse transition matrices.
+\item \textbf{Terminal values:} score $=+1-\gamma V_{\text{opp}}(\text{pull})$; turnover $=-\gamma V_{\text{opp}}(\text{pickup})$, so field position after a mistake matters.
+\item \textbf{Solve:} max--min value iteration~\cite{condon1992,baier2008}, $\gamma=0.97$, tolerance $10^{-7}$; 416 iterations, $\sim$4.5 min solve plus $\sim$1.5 min build.
+\item \textbf{Play:} in the real game, evaluate all 300 (or 1,372) actions with exact one-step catch odds plus the solved value of the landing abstract state; take the best. Exact now, blurry later.
+\end{itemize}
 
-\subsection{The Calculator (formal methods)}
-We construct an abstract turn-based stochastic game $\hat{G} = (\hat{S}_O \cup \hat{S}_D, A, \hat{P}, \mathit{Goal})$. Each abstract state records the zone of each offensive player, using $3$ lanes $\times$ $4$ depths $= 12$ zones, which player holds the disc, and for each receiver whether its nearest defender is \emph{close in front}, \emph{close behind}, or \emph{far}. Abstract throw probabilities $\hat{P}$ are estimated by sampling concrete states that map to each abstract state and averaging $p_{\text{catch}}$; abstract movement transitions are derived the same way.
-
-The offense's objective is the bounded reachability property $\Diamond^{\le 30}\,\mathit{Goal}$. We compute the max--min reachability value and the corresponding optimal strategies for both players using value iteration for turn-based stochastic games~\cite{condon1992,baier2008}. We also compute the positive and almost-sure winning regions by attractor construction. When playing offense, the Calculator maps the concrete state to its abstract state and plays the maximizing strategy; on defense, it plays the minimizing strategy. With about $12^3 \times 3 \times 3^2 \approx 4.7 \times 10^4$ abstract states before the time bound, the game is small enough to solve exactly. We will cross-check the solver against \texttt{pymdptoolbox}~\cite{pymdptoolbox} on the MDP obtained by fixing the defense's strategy.
-
-\subsection{Opus (LLM)}
-Each turn, the concrete state (all player coordinates, disc holder, turn count, and the catch probability of every legal throw) is rendered as text. Claude Opus returns a move in a structured JSON format, chosen from an enumerated list of legal moves. Illegal or malformed answers are re-prompted once and otherwise replaced by ``hold.''
+\subsection{LLM coach}
+\begin{itemize}
+\item Claude via the \texttt{claude -p} CLI~\cite{claude}; each decision gets the state as readable text: positions, marks, every option's resulting square and catch / drop / interception odds, hold legality.
+\item Answers named-field JSON; one retry, then the scripted move as fallback (never triggered in the Opus run).
+\item Learning variant: one persistent session, feedback after every point, up to 5 written lessons after every game.
+\item Planned (v2): clearer prompt with an ASCII field sketch, a plain-English rules briefing, rounded odds and turnover consequences; no move recommendations.
+\end{itemize}
 
 \subsection{Scripted baseline}
-On offense, the baseline throws to the teammate with the highest $p_{\text{catch}}$ if it exceeds a fixed threshold and otherwise moves receivers toward the endzone. On defense, each defender moves to the in-front position of a fixed assigned receiver (man-to-man).
-
-\subsection{Experimental setup}
-Every coach plays offense against every coach on defense ($3 \times 3$ matchups), for $N$ games per matchup from a fixed set of randomized starting positions. We record:
 \begin{itemize}
-\item \textbf{Win rate:} fraction of possessions that score.
-\item \textbf{Turnover rate and turns to score.}
-\item \textbf{Abstract regret:} for each move, the gap between the abstract value of the move chosen and the abstract optimum; a move is flagged as a \emph{mistake} if the gap exceeds $\epsilon$.
-\item \textbf{Abstraction gap:} the difference between the Calculator's predicted value $\hat{V}(\hat{s}_0)$ and its empirical win rate in the concrete game.
+\item Offense: receivers cut to open space going forward; throw to the best forward target if $p_{\text{catch}}\ge0.65$, else hold; on the forced turn throw to the best target.
+\item Defense: tight-front on your mark; poach when your mark is $>7$ squares from the disc (deep if near the endzone); the marker doubles when receivers bunch near the holder.
 \end{itemize}
-We report 95\% confidence intervals on all rates.
+
+\subsection{Calibration and experiments}
+\begin{itemize}
+\item \textbf{Calibration:} grid over $P\in\{0.1,0.2,0.35,0.5\}$, Calculator self-play, 20 games to 10 each; minimize squared relative error vs UFA 2025 targets. At $P=0.1$: completion 93.0\% (UFA 94.1\%), receiving team scores 55.1\% (53.5\%), 0.58 turnovers/point (0.82), 5.8 passes/goal (8.3).
+\item \textbf{Matchups:} LLM vs Calculator; Calculator vs Scripted as a floor check.
+\item \textbf{Metrics:} wins, points per possession (headline), turnovers per possession, completion rate, rows gained per throw, backward-throw share.
+\item \textbf{Planned final experiment} (the main result): Haiku at high reasoning effort vs Calculator, same v2 prompt everywhere, 10 games to 10 per condition, three memory conditions:
+  \begin{itemize}
+  \item \emph{Zero-shot:} fresh session every decision (no memory).
+  \item \emph{Per game:} one session per game, told the result of each point.
+  \item \emph{Across games:} one session for all 10 games, point results plus up to 5 written lessons after each game.
+  \end{itemize}
+  The first two run in parallel; the third runs sequentially.
+\end{itemize}
 
 \section{Expected Outcomes}
-We expect the Calculator to have the lowest turnover rate and to be strongest on defense, where coarse positional rules transfer well, and Opus to find more scoring opportunities that the zones hide (e.g., a receiver one square open) at the cost of more risky throws. Against the scripted baseline, both should clearly win. The abstraction gap is itself a main result: it quantifies how much of the formal guarantee survives the trip back to the concrete game.
-
-\textbf{Challenges and mitigation.}
 \begin{itemize}
-\item \emph{Abstraction too coarse}, so the abstract optimum plays poorly. Mitigation: refine the zones where the abstraction gap is largest, in the spirit of counterexample-guided abstraction refinement~\cite{clarke2000}, and report results at two granularities.
-\item \emph{Non-determinism in the abstraction}: one abstract state covers concrete states with different outcomes. Mitigation: average over samples as above, and compare against an interval (pessimistic) estimate.
-\item \emph{UFA data granularity}: public statistics may not give completion rate by exact distance. Mitigation: fit a smooth logistic curve to binned completion rates and state the fit.
-\item \emph{LLM output errors and run-to-run variance}. Mitigation: legal-move menus, JSON output, fixed sampling settings, and enough games for tight confidence intervals.
+\item \textbf{Preliminary results:}
+  \begin{itemize}
+  \item Calculator vs Scripted: the receiving team scores 55\% of points with the Calculator vs 18\% with Scripted.
+  \item Haiku vs Calculator (10 games to 10): Calculator won all 10; points/possession 0.12 vs 0.79. Haiku threw safely but gained $\sim$0.3 rows/throw with 39\% backward throws (Calculator 2.3 rows/throw).
+  \item Opus learning run (6 games to 5, one session): Opus won 4--2 (26--18 points), 0.68 vs 0.49 points/possession, but its scoring fell from 1.0 to $\sim$0.44 per possession over the run.
+  \end{itemize}
+\item \textbf{Expectation:} a weak LLM loses to the abstraction; a strong one can exploit what the abstraction forgets (exact openness, mark identities).
+\item \textbf{Planned experiment hypotheses} (Haiku, v2 prompt, 10 games each vs Calculator):
+  \begin{itemize}
+  \item The v2 prompt alone (fresh session per decision) raises Haiku's points/possession above the 0.12 baseline, isolating the prompt effect.
+  \item One session per game lets Haiku adapt within a game (e.g., to the Calculator's defensive habits); expect fewer turnovers late in games.
+  \item One session across all 10 games tests whether lessons carry over; the Opus run suggests accumulated lessons can hurt, so we test whether this repeats or reverses.
+  \item Compare all three on wins, points/possession, turnovers/possession, rows gained/throw and backward-throw share, plus per-game curves for the two session conditions.
+  \end{itemize}
+\item \textbf{Challenges and mitigation:}
+  \begin{itemize}
+  \item Calibration gaps (too few passes/goal; 34\% vs 15\% of goals right after a turnover): reported as limitations, not tuned away.
+  \item LLM performance depends on the prompt: one v2 prompt shared across all conditions.
+  \item Small samples (6--10 games), LLM cost and latency: report per-game numbers, treat trends as descriptive.
+  \item Abstraction error: compare the abstract value with realized points per possession; refine zones where the gap is largest (CEGAR-style~\cite{clarke2000}).
+  \item Break-throw penalty unidentifiable from UFA data: multiplier fixed at 1.0.
+  \end{itemize}
+\item \textbf{Future work:} shield the LLM with the Calculator's safe region~\cite{alshiekh2018}; simultaneous moves as a concurrent reachability game~\cite{dealfaro2007}.
 \end{itemize}
-
-\textbf{Future work.} A hybrid coach in which the Calculator's safety invariant \emph{shields} Opus, vetoing moves outside the safe region~\cite{alshiekh2018}, and simultaneous moves, which would turn the game into a concurrent reachability game~\cite{dealfaro2007}.
 
 \section{Questions for the Instructor}
 \begin{enumerate}
-\item Is comparing an abstraction-derived strategy against an LLM an appropriate scope, or should we also include a learned (RL) policy as a comparison point?
-\item Is bounded reachability (score within 30 turns) a good objective here, or would you prefer a discounted-reward formulation?
-\item Should the Calculator's strategy come from the quantitative max--min value, or from the qualitative almost-sure winning region plus a safety invariant?
-\item Is our abstract state space (about $5 \times 10^4$ states) an appropriate size, or would you like us to study how solving time scales as we refine it?
+\item Is an abstraction with sampled transitions acceptable, or do you want a bound on abstraction error?
+\item Should we add a formal check of the abstract strategy (e.g., a model checker such as PRISM-games)?
+\item Is comparing LLM memory conditions in scope, or should we focus on Calculator vs LLM only?
 \end{enumerate}
 
 \begin{thebibliography}{9}
-\bibitem{ufa} Ultimate Frisbee Association, ``UFA statistics,'' [Online]. Available: \url{https://www.watchufa.com/stats}
+\bibitem{ufa} Ultimate Frisbee Association, ``UFA statistics API,'' 2025. [Online]. Available: \url{https://www.backend.ufastats.com/api/v1}
+\bibitem{shapley1953} L.~S. Shapley, ``Stochastic games,'' \emph{Proc. Natl. Acad. Sci.}, vol.~39, no.~10, pp.~1095--1100, 1953.
 \bibitem{condon1992} A.~Condon, ``The complexity of stochastic games,'' \emph{Information and Computation}, vol.~96, no.~2, pp.~203--224, 1992.
 \bibitem{baier2008} C.~Baier and J.-P.~Katoen, \emph{Principles of Model Checking}. MIT Press, 2008.
-\bibitem{pymdptoolbox} S.~Cordwell, ``pymdptoolbox: Markov decision process toolbox for Python,'' [Online]. Available: \url{https://github.com/sawcordwell/pymdptoolbox}
 \bibitem{clarke2000} E.~Clarke, O.~Grumberg, S.~Jha, Y.~Lu, and H.~Veith, ``Counterexample-guided abstraction refinement,'' in \emph{Proc. CAV}, 2000, pp.~154--169.
 \bibitem{alshiekh2018} M.~Alshiekh, R.~Bloem, R.~Ehlers, B.~K\"onighofer, S.~Niekum, and U.~Topcu, ``Safe reinforcement learning via shielding,'' in \emph{Proc. AAAI}, 2018.
 \bibitem{dealfaro2007} L.~de~Alfaro, T.~A.~Henzinger, and O.~Kupferman, ``Concurrent reachability games,'' \emph{Theoretical Computer Science}, vol.~386, no.~3, pp.~188--217, 2007.
+\bibitem{claude} Anthropic, ``Claude Code documentation,'' 2025. [Online]. Available: \url{https://docs.anthropic.com/en/docs/claude-code}
 \end{thebibliography}
 
 \end{document}
