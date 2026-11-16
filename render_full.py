@@ -102,47 +102,60 @@ def absolute_records(g):
     return result
 
 
-def broadcast_schedule(rows,highlights,max_seconds=150):
-    """Calm event coverage; budget removes approach turns, then extra interceptions.
+def broadcast_schedule(rows,highlights,max_seconds=150,points=None):
+    """Select complete points only; routine actions use eased 3x motion.
 
-    Never accelerate action to meet a budget. Goals and pulls are mandatory;
-    reject budgets too small for them. Full mode ignores the highlight budget.
+    Explicit point lists are authoritative (an undersized budget raises).
+    Automatic selection prefers a clean hold, turnover break, and final point;
+    remove whole points if needed. Never remove turns within a selected point.
     """
-    goals={i for i,h in enumerate(rows) if h['goal']}
-    interceptions={i for i,h in enumerate(rows) if h.get('throw_result')=='interception'}
-    selected=set(range(len(rows))) if highlights is None else goals|interceptions
+    groups={p:[h for h in rows if h['point']==p] for p in sorted({h['point'] for h in rows})}
+    complete=[p for p,rs in groups.items() if rs[-1]['goal']]
+    if points is not None:
+        if not set(points)<=set(complete):raise ValueError('points must name completed points')
+        selected=sorted(set(points))
+    elif highlights is None:selected=list(groups)
+    else:
+        clean=next((p for p in complete if not any(h.get('throw_result') in ('drop','interception') for h in groups[p])),None)
+        breaker=next((p for p in complete if groups[p][-1]['team']!=groups[p][0]['team']),None)
+        selected=sorted({p for p in (clean,breaker,complete[-1] if complete else None) if p is not None})
+        for p in complete:
+            if len(selected)>=3:break
+            if p not in selected:selected.append(p)
+        selected.sort()
+    def build(chosen):
+        schedule=[('title',None,None,60)];last=0
+        for point in chosen:
+            rs=groups[point];h=rs[0];prior=next((r for r in reversed(rows) if r['point']<point),None)
+            card=dict(h,score=prior['score'] if prior else [0,0])
+            card['card_text']=f'Point {point}'
+            skipped=[p for p in complete if last<p<point]
+            if skipped:
+                wins=[sum(groups[p][-1]['team']==t for p in skipped) for t in (0,1)]
+                card['skipped']=(skipped[0],skipped[-1],wins)
+            schedule.append(('point_card',card,None,45));last=point
+            if h.get('setup'):
+                setup=h['setup'];schedule.append(('pull',setup[0],None,30))
+                for before,after in zip(setup,setup[1:]):schedule.append(('run',after,before,21))
+                schedule.append(('set',setup[-1],None,30));prev=setup[-1]
+            else:
+                schedule.extend([('pull',h,None,30),('set',h,None,30)]);prev=None
+            for h in rs:
+                event=h['goal'] or h.get('throw_result') in ('drop','interception')
+                long=h.get('receiver') is not None and np.linalg.norm(np.array(h['receiver'])-h['thrower'])*5>15
+                fast=highlights is not None and not event and not long
+                count=30 if h.get('receiver') else 21
+                schedule.append(('fast' if fast else 'play',h,prev,round(count/3) if fast else count))
+                if event:schedule.append(('hold',h,None,45))
+                if h['goal']:schedule.append(('replay',h,prev,30))
+                prev=h
+        schedule.append(('final',rows[-1],None,60));return schedule
+    schedule=build(selected)
     if highlights is not None:
-        for i in goals:
-            for j in range(max(0,i-min(highlights,4)+1),i):
-                if rows[j]['point']==rows[i]['point']:selected.add(j)
-    def build():
-        schedule=[('title',None,None,60)]
-        for i,h in enumerate(rows):
-            prev=rows[i-1] if i else None
-            if i==0 or prev['goal']:
-                if h.get('setup'):
-                    setup=h['setup']
-                    schedule.append(('pull',setup[0],None,30))
-                    for before,after in zip(setup,setup[1:]):schedule.append(('run',after,before,21))
-                    schedule.append(('set',setup[-1],None,30))
-                else:schedule.extend([('pull',h,prev,30),('set',h,None,30)])
-            if i not in selected:continue
-            if h.get('setup'):prev=h['setup'][-1]
-            schedule.append(('play',h,prev,30 if h.get('receiver') else 21))
-            if h['goal'] or h.get('throw_result') in ('drop','interception'):
-                schedule.append(('hold',h,None,45))
-            if h['goal']:schedule.append(('replay',h,prev,30))
-        schedule.append(('final',rows[-1],None,60))
-        return schedule
-    if highlights is not None:
-        # Keep the final approach nearest each goal for as long as the budget permits.
-        optional=sorted(selected-goals-interceptions)
-        for i in optional+sorted(interceptions):
-            if sum(n for _,_,_,n in build())<=max_seconds*30:break
-            selected.remove(i)
-        if sum(n for _,_,_,n in build())>max_seconds*30:
-            raise ValueError('max-seconds too small for calm goals and pulls')
-    return build()
+        while sum(n for *_,n in schedule)>max_seconds*30 and len(selected)>1 and points is None:
+            selected.pop(0);schedule=build(selected)
+        if sum(n for *_,n in schedule)>max_seconds*30:raise ValueError('max-seconds too small for selected whole points')
+    return schedule
 
 
 def generated_audio(schedule,rate=44100):
@@ -170,11 +183,11 @@ def generated_audio(schedule,rate=44100):
     return audio
 
 
-def video(g,out,n,max_seconds=150,no_audio=False):
+def video(g,out,n,max_seconds=150,no_audio=False,points=None):
     """Render broadcast frames with Pillow and stream directly to H.264."""
     from PIL import Image, ImageDraw, ImageFont
     import subprocess, math
-    rows=absolute_records(g);schedule=broadcast_schedule(rows,n,max_seconds)
+    rows=absolute_records(g);schedule=broadcast_schedule(rows,n,max_seconds,points)
     W,H=1920,1080;bg='#0b1927';white='#f2f6fa';gold='#ffe17d'
     font_path='/System/Library/Fonts/Supplemental/Arial.ttf'
     if not Path(font_path).exists():font_path='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
@@ -208,7 +221,14 @@ def video(g,out,n,max_seconds=150,no_audio=False):
         for kind,h,prev,count in schedule:
             for k in range(count):
                 t=1.0 if kind in ('hold','set') else (.5+.5*(k+1)/count if kind=='replay' else (k+1)/count);s=t*t*(3-2*t);im=base.copy();d=ImageDraw.Draw(im)
-                if kind in ('title','final'):
+                if kind=='point_card':
+                    d.rectangle((0,0,W,H),fill=bg)
+                    text(d,(960,350),h['card_text'],80,fill=gold)
+                    text(d,(960,500),f"{g['teams'][0]} {h['score'][0]}   –   {h['score'][1]} {g['teams'][1]}",46)
+                    if h.get('skipped'):
+                        lo,hi,wins=h['skipped']
+                        text(d,(960,660),f"Points {lo}–{hi}: {g['teams'][0]} {wins[0]}, {g['teams'][1]} {wins[1]}",32)
+                elif kind in ('title','final'):
                     d.rectangle((0,0,W,H),fill=bg)
                     text(d,(960,230),'ULTIMATE',80);text(d,(960,335),'FULL GAME BROADCAST',32,fill=gold)
                     for team,x in ((0,570),(1,1350)):
@@ -269,8 +289,16 @@ def video(g,out,n,max_seconds=150,no_audio=False):
                     if banner:
                         d.rounded_rectangle((430,305,1490,375),radius=10,fill=bg);text(d,(960,340),banner,36,fill=gold)
                         if kind=='replay':text(d,(1680,238),'SLOW REPLAY',20,fill=gold)
+                    if kind=='fast':
+                        d.rounded_rectangle((1480,910,1750,972),radius=10,fill=bg)
+                        d.polygon([(1510,925),(1510,955),(1534,940)],fill=gold)
+                        d.polygon([(1542,925),(1542,955),(1566,940)],fill=gold)
+                        text(d,(1630,940),'3x',32,fill=gold)
                 proc.stdin.write(im.tobytes())
                 snap=('interception_hold_start' if k==0 else 'interception_hold_end' if k==30 else None) if kind=='hold' and h.get('throw_result')=='interception' else kind if kind in ('title','pull','run','final') else 'goal_replay' if kind=='replay' and h['goal'] else 'turnover' if kind=='play' and is_turn and t>.8 else None
+                if kind=='fast':snap='fast_forward'
+                if kind=='point_card' and h['point']>rows[0]['point']:snap='between_points'
+                if kind in ('play','fast') and h['point']==rows[0]['point'] and h.get('receiver') and 7<=h['receiver'][1]<=12 and t>.65:snap='midfield'
                 if kind=='run' and h.get('phase')=='rundown' and t>.5:snap='rundown'
                 if snap and snap not in snapshots and (kind not in ('pull','replay') or t>.5):
                     snapshots[snap]={'frame':frame_index,'seconds':frame_index/30}
@@ -318,7 +346,7 @@ def figures(games,out):
     (out/'figure_stats.json').write_text(json.dumps(stats,indent=2))
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('histories',nargs='+',type=Path);p.add_argument('--game-index',type=int,default=0);p.add_argument('--highlights',type=int,metavar='N');p.add_argument('--out',type=Path,default=Path('outputs_dev/v7/media'));p.add_argument('--figures',action='store_true');p.add_argument('--video',action='store_true');p.add_argument('--no-audio',action='store_true');p.add_argument('--max-seconds',type=float,default=150);p.add_argument('--model',choices=['haiku','opus'],help='Model used by legacy LLM histories (which omit model metadata)');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('histories',nargs='+',type=Path);p.add_argument('--points',type=int,nargs='+',help='Whole point numbers to render in highlights');p.add_argument('--game-index',type=int,default=0);p.add_argument('--highlights',type=int,metavar='N');p.add_argument('--out',type=Path,default=Path('outputs_dev/v7/media'));p.add_argument('--figures',action='store_true');p.add_argument('--video',action='store_true');p.add_argument('--no-audio',action='store_true');p.add_argument('--max-seconds',type=float,default=150);p.add_argument('--model',choices=['haiku','opus'],help='Model used by legacy LLM histories (which omit model metadata)');a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     games=[g for path in a.histories for g in json.loads(path.read_text())]
     for g in games:
         if 'LLM' in g['teams']:
@@ -326,7 +354,8 @@ def main():
             if not model:p.error('LLM history omits model; supply the run model with --model haiku|opus')
             g['teams']=[model.title() if t=='LLM' else t for t in g['teams']]
     if a.figures:figures(games,a.out)
+    if a.points is not None and a.highlights is None:a.highlights=3
     if a.video or not a.figures:
         g=games[a.game_index];name='_vs_'.join(g['teams'])+f'_game{a.game_index}'+('_highlights' if a.highlights is not None else '')
-        print(json.dumps(video(g,a.out/(name+'.mp4'),a.highlights,a.max_seconds,a.no_audio),indent=2))
+        print(json.dumps(video(g,a.out/(name+'.mp4'),a.highlights,a.max_seconds,a.no_audio,a.points),indent=2))
 if __name__=='__main__':main()

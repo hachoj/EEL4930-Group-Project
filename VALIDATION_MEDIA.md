@@ -97,3 +97,10 @@ An unlabeled legacy LLM file requires `--model`, avoiding a guessed model name.
 No engine, solver or saved history changes; no LLM calls.
 
 Tests: **51 run, 49 passed, 2 optional legacy artifact checks skipped**.
+
+## Whole-point highlights (supersedes earlier cutting policies)
+
+See `VALIDATION_EDIT.md`. Highlights preserve every turn of each selected point,
+using a visible 3x badge on routine actions instead of cutting within points.
+Use `--points 1 2 3` for explicit selection. The v8 demo is 106.1 seconds with
+all 181 turns and three pulls; output is under `outputs_dev/v8/media/edit/`.

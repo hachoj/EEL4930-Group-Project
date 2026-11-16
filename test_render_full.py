@@ -37,23 +37,46 @@ class BroadcastTests(unittest.TestCase):
                 self.assertNotEqual(h['team'],prev['team'])
                 self.assertEqual(h['point'],prev['point']+1)
 
-    def test_calm_highlights_goals_pulls_and_budget(self):
-        schedule=r.broadcast_schedule(self.rows,12)
-        shown={h['turn'] for kind,h,prev,n in schedule if kind=='play'}
-        ends={h['turn'] for h in self.rows if h['goal']}
-        self.assertTrue(ends<=shown)
-        self.assertLess(sum(n for _,_,_,n in schedule)/30,150)
-        self.assertEqual(sum(kind=='pull' for kind,_,_,_ in schedule),1+sum(h['goal'] for h in self.rows[:-1]))
+    def test_whole_points_and_budget(self):
+        schedule=r.broadcast_schedule(self.rows,3)
+        shown=[h for kind,h,prev,n in schedule if kind in ('play','fast')]
+        for point in {h['point'] for h in shown}:
+            self.assertEqual([h['turn'] for h in shown if h['point']==point],
+                             [h['turn'] for h in self.rows if h['point']==point])
+        self.assertLessEqual(sum(n for *_,n in schedule)/30,150)
+        self.assertTrue(any(kind=='fast' for kind,*_ in schedule))
+        self.assertEqual(sum(kind=='pull' for kind,*_ in schedule),len({h['point'] for h in shown}))
+        with self.assertRaises(ValueError):r.broadcast_schedule(self.rows,3,1)
+
+    def test_v8_continuous_rendered_turns(self):
+        g=json.loads(Path('outputs_dev/v8/demo/Calculator_vs_Scripted_games.json').read_text())[0]
+        rows=r.absolute_records(g)
+        schedule=r.broadcast_schedule(rows,3,150,points=[1,2,3])
+        count=0
+        for kind,h,prev,n in schedule:
+            if kind not in ('play','fast','run') or prev is None:continue
+            # Administrative seal/pickup changes already exist in the engine;
+            # renderer must use exactly adjacent original states, never a cut.
+            if kind in ('play','fast') and not h.get('setup'):
+                i=rows.index(h);self.assertIs(prev,rows[i-1])
+            exception=prev.get('throw_result') in ('caught','drop','interception')
+            for key,pos in h['players'].items():
+                distance=np.max(abs(np.array(pos)-prev['players'][key]))
+                if exception:continue  # inherited seal / pickup only
+                self.assertLessEqual(distance,1,(h['turn'],key))
+                count+=1
+        self.assertGreater(count,500)
 
     def test_pacing_and_audio(self):
         schedule=r.broadcast_schedule(self.rows,None)
         self.assertTrue(all(n==45 for kind,h,prev,n in schedule if kind=='hold'))
         self.assertTrue(all(n>=21 for kind,h,prev,n in schedule if kind=='play'))
         self.assertEqual(sum(kind=='set' for kind,_,_,_ in schedule),1+sum(h['goal'] for h in self.rows[:-1]))
-        audio=r.generated_audio(schedule[:3])
+        intro=schedule[:next(i+1 for i,x in enumerate(schedule) if x[0]=='set')]
+        audio=r.generated_audio(intro)
         self.assertGreater(np.max(abs(audio)),0)
         self.assertLessEqual(np.max(abs(audio)),.65)
-        self.assertEqual(len(audio),round(sum(n for _,_,_,n in schedule[:3])*44100/30))
+        self.assertEqual(len(audio),round(sum(n for _,_,_,n in intro)*44100/30))
 
     def test_unknown_llm_modes_supported(self):
         g=dict(self.game);g['history']=[dict(h,coach='LLM') for h in self.game['history'][:6]]
