@@ -91,13 +91,15 @@ def formation(spot):
     for p in o:d.append(min((q for q in cells if q not in o+d),key=lambda q:math.dist(q,[p[0],min(19,p[1]+1)])))
     return o,u.force.seal(o,d,u.assign_marks(o,d))
 
-def pull_setup(rng,depth_min=2,depth_max=3,run_turns=3):
+def pull_setup(rng,depth_min=2,depth_max=3,run_turns=3,cover_speed=3):
     """Scripted setup, not coach decisions. Frames preserve lineup identities.
 
-    Receiver walks to sampled landing; teammates wait during pickup. Then both
-    teams run legal one-square steps for run_turns. Holder remains stationary.
+    Four default hang-time rounds represent about 6 seconds: one initial
+    cover round plus three receiver/setup rounds. Cover takes cover_speed
+    one-cell substeps per round; receivers take one. Every substep is saved.
+    Defenders target three rows goal-side of their lineup-assigned receiver.
     """
-    if not 0<=depth_min<=depth_max<=16 or run_turns<0:raise ValueError('invalid pull configuration')
+    if not 0<=depth_min<=depth_max<=16 or run_turns<0 or not isinstance(cover_speed,int) or cover_speed<1:raise ValueError('invalid pull configuration')
     o=[[2,2],[5,2],[8,2]];d=[[2,17],[5,17],[8,17]]
     depth=rng.choices([2,3],weights=[.6,.4])[0] if (depth_min,depth_max)==(2,3) else rng.randint(depth_min,depth_max)
     landing=[rng.randrange(10),depth]
@@ -114,15 +116,24 @@ def pull_setup(rng,depth_min=2,depth_max=3,run_turns=3):
             proposed.append(dest);occupied.add(tuple(dest))
         x,y=u.resolve(proposed,d,0,o,d) if side==0 else u.resolve(o,proposed,1,o,d)
         o,d=x,y
+    def cover_round(phase):
+        # Hang-time substeps are recorded individually: never jump cells.
+        targets=[[q[0],min(19,q[1]+3)] for q in o]
+        for _ in range(cover_speed):
+            step(targets,1)
+            frames.append(dict(phase=phase,o=[q[:] for q in o],d=[q[:] for q in d]))
+    cover_round('hang')
     while o[pick]!=landing:
         targets=[q[:] for q in o];targets[pick]=landing
         step(targets,0)
-        frames.append(dict(phase='pickup',o=[q[:] for q in o],d=[q[:] for q in d]))
+        frames.append(dict(phase='hang',o=[q[:] for q in o],d=[q[:] for q in d]))
         if len(frames)>30:raise RuntimeError('pull pickup blocked')
     for _ in range(run_turns):
         targets=[([max(0,min(9,landing[0]+(-3 if k<pick else 3))),min(16,landing[1]+3)] if k!=pick else landing) for k in range(3)]
-        step(targets,0);step(o,1)
-        frames.append(dict(phase='rundown',o=[q[:] for q in o],d=[q[:] for q in d]))
+        step(targets,0)
+        frames.append(dict(phase='hang',o=[q[:] for q in o],d=[q[:] for q in d]))
+        cover_round('hang')
+    frames.append(dict(phase='rundown',o=[q[:] for q in o],d=[q[:] for q in d]))
     o[0],o[pick]=o[pick],o[0]
     return o,d,u.assign_marks(o,d),dict(landing=landing,pickup_player=pick,frames=frames)
 
@@ -135,9 +146,9 @@ def failure_zones(o,d,r):
     return j.zones(np.array([9,19])-spots)
 
 class Solver:
-    def __init__(self,samples=8,max_hold=3,gamma=.97,tol=1e-7,out=Path('outputs_dev/v8'),pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3):
+    def __init__(self,samples=8,max_hold=3,gamma=.97,tol=1e-7,out=Path('outputs_dev/v9'),pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3,cover_speed=3):
         self.pressure=pressure
-        self.pull_config=(pull_min,pull_max,pull_run_turns)
+        self.pull_config=(pull_min,pull_max,pull_run_turns,cover_speed)
         starts=[pull_setup(random.Random(9500+i),*self.pull_config) for i in range(128)]
         self.goal_starts=np.array([u.INDEX[u.key(o,d)] for o,d,_,_ in starts])
         start=time.monotonic();self.max_hold=max_hold;self.gamma=gamma;n=len(u.KEYS);self.n=n
@@ -355,14 +366,14 @@ def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10,action_info=Non
             if f.exists():f.unlink()
     return (*scripted(o,d,side,c,max_hold,marks,action_info),calls)
 
-def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='haiku',out=Path('outputs_dev/v8'),first=0,pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3):
+def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='haiku',out=Path('outputs_dev/v9'),first=0,pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3,cover_speed=3):
     global PRESSURE
     PRESSURE=pressure
     if not 0<=pressure<=1:raise ValueError('pressure must be in [0,1]')
     if solver is not None and hasattr(solver,'pressure') and solver.pressure!=pressure:raise ValueError('solver pressure mismatch')
-    if solver is not None and hasattr(solver,'pull_config') and solver.pull_config!=(pull_min,pull_max,pull_run_turns):raise ValueError('solver pull configuration mismatch')
+    if solver is not None and hasattr(solver,'pull_config') and solver.pull_config!=(pull_min,pull_max,pull_run_turns,cover_speed):raise ValueError('solver pull configuration mismatch')
     rng=random.Random(seed);teams=[team0,team1];active=first
-    o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns)
+    o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns,cover_speed)
     pulls=[dict(pull,team=active,start_turn=1)]
     scores=[0,0];history=[];possessions=[];c=0;side=0;beg=0;throws=0;caught=0;calls=0;pos_throws=0;pos_caught=0;start_spot=o[0][:]
     defense_info=None
@@ -394,13 +405,13 @@ def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='ha
             possessions.append(dict(team=active,start_turn=beg+1,end_turn=turn+1,turns=turn+1-beg,outcome=event,score=scores[:],turnover_spot=spot,start_spot=start_spot,throws=pos_throws,completed=pos_caught));beg=turn+1
             if max(scores)>=target:break
             if event=='score':
-                o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns)
+                o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns,cover_speed)
                 pulls.append(dict(pull,team=1-active,start_turn=turn+2))
             else:o,d,marks=flip(o,d,spot,interceptor)
             defense_info=None
             active=1-active;side=0;c=0;pos_throws=0;pos_caught=0;start_spot=o[0][:]
         else:side=1-side
-    return dict(model=model,pressure=pressure,pull_config=[pull_min,pull_max,pull_run_turns],pulls=pulls,teams=teams,seed=seed,first=first,score=scores,finished=max(scores)>=target,safety_cap_triggered=max(scores)<target,turns=len(history),throws=throws,completed=caught,llm_calls=calls,llm_decisions=sum(h['coach']=='LLM' for h in history),possessions=possessions,history=history)
+    return dict(model=model,pressure=pressure,pull_config=[pull_min,pull_max,pull_run_turns,cover_speed],pulls=pulls,teams=teams,seed=seed,first=first,score=scores,finished=max(scores)>=target,safety_cap_triggered=max(scores)<target,turns=len(history),throws=throws,completed=caught,llm_calls=calls,llm_decisions=sum(h['coach']=='LLM' for h in history),possessions=possessions,history=history)
 
 class LocalUnpickler(pickle.Unpickler):
     def find_class(self,module,name):
@@ -418,7 +429,7 @@ def init_worker(path,args):
     if 'Calculator' in (args.team0,args.team1):
         _WORKER=load_solver(path)
 def worker(i):
-    a=_ARGS;return game(a.team0,a.team1,a.seed+i,_WORKER,a.max_hold,a.target,a.safety_cap,a.model,a.out,i%2,a.pressure,a.pull_min,a.pull_max,a.pull_run_turns)
+    a=_ARGS;return game(a.team0,a.team1,a.seed+i,_WORKER,a.max_hold,a.target,a.safety_cap,a.model,a.out,i%2,a.pressure,a.pull_min,a.pull_max,a.pull_run_turns,a.cover_speed)
 
 def summarize(games):
     dist=collections.Counter(f'{g["score"][0]}-{g["score"][1]}' for g in games)
@@ -426,15 +437,15 @@ def summarize(games):
     return dict(n=len(games),final_scores=dict(sorted(dist.items())),wins_team0=sum(g['score'][0]>g['score'][1] for g in games),points_per_possession=[sum(p['outcome']=='score' for p in poss if p['team']==t)/max(1,sum(p['team']==t for p in poss)) for t in (0,1)],completion_rate=sum(g['completed'] for g in games)/max(1,sum(g['throws'] for g in games)),throws=sum(g['throws'] for g in games),mean_turns=float(np.mean([g['turns'] for g in games])),mean_coach_decisions=float(np.mean([g['turns']/2 for g in games])),safety_cap_triggers=sum(g['safety_cap_triggered'] for g in games),possessions=len(poss))
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--pressure',type=float,default=1.);p.add_argument('--pull-min',type=int,default=2);p.add_argument('--pull-max',type=int,default=3);p.add_argument('--pull-run-turns',type=int,default=3);p.add_argument('--team0',choices=['Calculator','Scripted','LLM'],default='Calculator');p.add_argument('--team1',choices=['Calculator','Scripted','LLM'],default='Scripted');p.add_argument('--n',type=int,default=20);p.add_argument('--jobs',type=int,default=2);p.add_argument('--samples',type=int,default=8);p.add_argument('--max-hold',type=int,default=3);p.add_argument('--target',type=int,default=10);p.add_argument('--safety-cap',type=int,default=20000);p.add_argument('--model',choices=['haiku','opus'],default='haiku');p.add_argument('--out',type=Path,default=Path('outputs_dev/v8'));p.add_argument('--seed',type=int,default=1700);p.add_argument('--rebuild',action='store_true');a=p.parse_args()
-    if min(a.max_hold,a.target,a.n,a.jobs,a.samples)<1:p.error('positive counts required')
+    p=argparse.ArgumentParser();p.add_argument('--cover-speed',type=int,default=3);p.add_argument('--pressure',type=float,default=1.);p.add_argument('--pull-min',type=int,default=2);p.add_argument('--pull-max',type=int,default=3);p.add_argument('--pull-run-turns',type=int,default=3);p.add_argument('--team0',choices=['Calculator','Scripted','LLM'],default='Calculator');p.add_argument('--team1',choices=['Calculator','Scripted','LLM'],default='Scripted');p.add_argument('--n',type=int,default=20);p.add_argument('--jobs',type=int,default=2);p.add_argument('--samples',type=int,default=8);p.add_argument('--max-hold',type=int,default=3);p.add_argument('--target',type=int,default=10);p.add_argument('--safety-cap',type=int,default=20000);p.add_argument('--model',choices=['haiku','opus'],default='haiku');p.add_argument('--out',type=Path,default=Path('outputs_dev/v9'));p.add_argument('--seed',type=int,default=1700);p.add_argument('--rebuild',action='store_true');a=p.parse_args()
+    if min(a.max_hold,a.target,a.n,a.jobs,a.samples,a.cover_speed)<1:p.error('positive counts required')
     if not 0<=a.pressure<=1:p.error('pressure must be in [0,1]')
     a.out.mkdir(parents=True,exist_ok=True);cache=a.out/'solver.pkl';start=time.monotonic()
     if 'Calculator' in (a.team0,a.team1):
-        if a.rebuild or not cache.exists():Solver(a.samples,a.max_hold,out=a.out,pressure=a.pressure,pull_min=a.pull_min,pull_max=a.pull_max,pull_run_turns=a.pull_run_turns)
+        if a.rebuild or not cache.exists():Solver(a.samples,a.max_hold,out=a.out,pressure=a.pressure,pull_min=a.pull_min,pull_max=a.pull_max,pull_run_turns=a.pull_run_turns,cover_speed=a.cover_speed)
         else:
             s=load_solver(cache)
-            if getattr(s,'pressure',None)!=a.pressure or getattr(s,'pull_config',None)!=(a.pull_min,a.pull_max,a.pull_run_turns) or s.max_hold!=a.max_hold or s.info['samples_per_state']!=a.samples:raise ValueError('cache configuration mismatch; use --rebuild')
+            if getattr(s,'pressure',None)!=a.pressure or getattr(s,'pull_config',None)!=(a.pull_min,a.pull_max,a.pull_run_turns,a.cover_speed) or s.max_hold!=a.max_hold or s.info['samples_per_state']!=a.samples:raise ValueError('cache configuration mismatch; use --rebuild')
     with concurrent.futures.ProcessPoolExecutor(a.jobs,initializer=init_worker,initargs=(cache,a)) as pool:games=list(pool.map(worker,range(a.n)))
     prefix=f'{a.team0}_vs_{a.team1}';(a.out/f'{prefix}_games.json').write_text(json.dumps(games));summary=summarize(games);summary['wall_seconds']=time.monotonic()-start
     (a.out/f'{prefix}_run.json').write_text(json.dumps({**vars(a),'out':str(a.out),'wall_seconds':summary['wall_seconds']},indent=2))

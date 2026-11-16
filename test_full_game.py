@@ -237,6 +237,30 @@ class PullRules(unittest.TestCase):
             canonical[0],canonical[pick]=canonical[pick],canonical[0]
             self.assertEqual(canonical,o);self.assertEqual(frames[-1]['d'],d)
             self.assertIn(u.key(o,d),u.INDEX)
+    def test_hang_time_coverage_bound(self):
+        import random
+        for seed in range(500):
+            o,d,marks,pull=f.pull_setup(random.Random(seed))
+            for k,mark in enumerate(marks):
+                self.assertLessEqual(np.linalg.norm(np.array(d[k])-o[mark]),4)
+        with self.assertRaises(ValueError):f.pull_setup(random.Random(0),cover_speed=0)
+
+    def test_hang_flight_uses_every_recorded_substep(self):
+        import render_full as r
+        g=f.game('Scripted','Scripted',82,None,target=2,pressure=.1)
+        rows=r.absolute_records(g)
+        schedule=r.broadcast_schedule(rows,3,max_seconds=150)
+        for h in rows:
+            if not h.get('setup'):continue
+            flight=[(row,prev) for kind,row,prev,n in schedule
+                    if kind=='pull' and row['point']==h['point']]
+            if not flight:continue
+            self.assertEqual(len(flight),sum(x['phase']=='hang' for x in h['setup']))
+            for row,prev in flight:
+                for key in row['players']:
+                    self.assertLessEqual(np.max(abs(np.array(row['players'][key])-prev['players'][key])),1)
+            self.assertEqual(flight[-1][0]['pull_fraction'][1],1.)
+
     def test_pressure_scales_both_hazards(self):
         o=np.array([[[5,1],[5,9],[8,9]]]);d=np.array([[[5,5],[5,8],[9,19]]])
         ps=[]

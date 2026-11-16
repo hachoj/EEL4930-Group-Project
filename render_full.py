@@ -84,12 +84,16 @@ def absolute_records(g):
             for frame in pull['frames']:
                 setup.append(dict(h,players={(team,k):point(p) for team,key in ((t,'o'),(1-t,'d')) for k,p in enumerate(frame[key])},absolute_o=[point(p) for p in frame['o']],absolute_d=[point(p) for p in frame['d']],phase=frame['phase'],landing=point(pull['landing']),thrower=point(pull['landing']),receiver=None,_modes=[],_switch=False,goal=False,direction=-1 if rotated else 1,point=len(result)+1))
             for frame in setup:
+                frame['offense_keys']=[(t,k) for k in range(3)]
+                frame['defense_keys']=[(1-t,k) for k in range(3)]
                 frame.pop('throw_result',None);frame.pop('turnover_spot',None)
                 frame['score']=previous['score'][:] if previous else [0,0]
             pick=pull['pickup_player'];ids[t][0],ids[t][pick]=ids[t][pick],ids[t][0]
         row=dict(h);row['players']={}
         for team,key in ((t,'o'),(1-t,'d')):
             for k,p in enumerate(h[key]):row['players'][(team,ids[team][k])]=point(p)
+        row['offense_keys']=[(t,ids[t][k]) for k in range(3)]
+        row['defense_keys']=[(1-t,ids[1-t][k]) for k in range(3)]
         row['absolute_o']=[point(p) for p in h['o']];row['absolute_d']=[point(p) for p in h['d']]
         for key in ('thrower','receiver','turnover_spot'):
             if h.get(key) is not None:row[key]=point(h[key])
@@ -100,6 +104,25 @@ def absolute_records(g):
         if setup:row['setup']=setup
         result.append(row);previous=h
     return result
+
+
+def role_positions(h,players):
+    """Single source of rendered coordinates for jerseys, modes and seal."""
+    return ([players[key] for key in h['offense_keys']],
+            [players[key] for key in h['defense_keys']])
+
+
+def throw_endpoint(h):
+    """Outcome endpoint in stadium coordinates, before any drop skid."""
+    if h.get('throw_result')=='interception':return h['turnover_spot']
+    if h.get('throw_result') in ('incomplete','throwaway'):
+        return (np.array(h['receiver'])+.18*(np.array(h['receiver'])-h['thrower'])).tolist()
+    return h['receiver']
+
+def drop_skid(t):
+    # Flight arrives at 75%; unsecured disc bounces, falls and skids beside B/C.
+    q=max(0.,min(1.,(t-.75)/.25))
+    return np.array([28*q,18*q-18*np.sin(np.pi*q)])
 
 
 def broadcast_schedule(rows,highlights,max_seconds=150,points=None):
@@ -135,8 +158,20 @@ def broadcast_schedule(rows,highlights,max_seconds=150,points=None):
                 card['skipped']=(skipped[0],skipped[-1],wins)
             schedule.append(('point_card',card,None,45));last=point
             if h.get('setup'):
-                setup=h['setup'];schedule.append(('pull',setup[0],None,30))
-                for before,after in zip(setup,setup[1:]):schedule.append(('run',after,before,21))
+                setup=h['setup']
+                hang=[frame for frame in setup[1:] if frame['phase']=='hang']
+                if hang:
+                    # Same saved substeps, simultaneous cover and disc flight.
+                    before=setup[0]
+                    for i,after in enumerate(hang):
+                        flight=dict(after,pull_fraction=(i/len(hang),(i+1)/len(hang)))
+                        schedule.append(('pull',flight,before,round(180/len(hang))))
+                        before=after
+                    for after in setup[1+len(hang):]:
+                        schedule.append(('run',after,before,21));before=after
+                else:
+                    schedule.append(('pull',setup[0],None,30))
+                    for before,after in zip(setup,setup[1:]):schedule.append(('run',after,before,21))
                 schedule.append(('set',setup[-1],None,30));prev=setup[-1]
             else:
                 schedule.extend([('pull',h,None,30),('set',h,None,30)]);prev=None
@@ -237,7 +272,7 @@ def video(g,out,n,max_seconds=150,no_audio=False,points=None):
                     text(d,(960,525),'VS',36)
                     text(d,(960,720),'FINAL SCORE' if kind=='final' else f"Game to {max(g['score'])}",46)
                     if kind=='title':
-                        text(d,(960,830),'Lettered jerseys = players    •    White disc + trail = possession',28)
+                        text(d,(960,830),'Blue A/B/C = offense    •    Red D1/D2/D3 = defense',28)
                         text(d,(960,880),'Dashed lines = marks    •    Gold ring = force seal',28)
                         text(d,(960,930),'POACH / DOUBLE / SWITCH = defensive plays',24,fill='#a9bdc9')
                 else:
@@ -257,28 +292,45 @@ def video(g,out,n,max_seconds=150,no_audio=False,points=None):
                             for j in range(3):players[(team,j)]=[2+j*2.5,end]
                     elif prev and not prev['goal']:
                         players={key:(np.array(prev['players'][key])*(1-s)+np.array(p)*s) for key,p in players.items()}
+                    if h.get('throw_result')=='interception' and kind not in ('pull','run','set'):
+                        # A small anticipation step into the lane and return to
+                        # the recorded interception square; annotations follow it.
+                        key=min(h['defense_keys'],key=lambda key:np.linalg.norm(np.array(h['players'][key])-h['turnover_spot']))
+                        v=np.array(h['thrower'])-h['turnover_spot'];norm=np.linalg.norm(v)
+                        players=dict(players)
+                        players[key]=np.array(players[key])+.25*np.sin(np.pi*min(t/.75,1))*v/max(norm,1)
+                    offense,defense=role_positions(h,players)
                     if kind not in ('pull','run','set'):
                         for j,m in enumerate(h['marks']):
-                            a=xy(h['absolute_d'][j]);b=xy(h['absolute_o'][m]);v=np.array(b)-a
+                            a=xy(defense[j]);b=xy(offense[m]);v=np.array(b)-a
                             for z in np.arange(0,1,.10):d.line((tuple(np.array(a)+z*v),tuple(np.array(a)+min(z+.045,1)*v)),fill='#8aa99b',width=2)
-                        a=xy(h['absolute_d'][h['marks'].index(0)]);d.ellipse((a[0]-28,a[1]-28,a[0]+28,a[1]+28),outline=gold,width=3)
-                    for (team,j),p in players.items():
-                        x,y=xy(p);d.ellipse((x-22,y-22,x+22,y+22),fill=COLORS[team],outline=white,width=3);text(d,(x,y),'ABC'[j],24)
+                        a=xy(defense[h['marks'].index(0)]);d.ellipse((a[0]-28,a[1]-28,a[0]+28,a[1]+28),outline=gold,width=3)
+                    for positions,color,labels in ((offense,COLORS[0],['A','B','C']),(defense,COLORS[1],['D1','D2','D3'])):
+                        for p,label in zip(positions,labels):
+                            x,y=xy(p);d.ellipse((x-24,y-24,x+24,y+24),fill=color,outline=white,width=3);text(d,(x,y),label,20)
                     if kind=='pull':
-                        a=[4.5,17 if direction>0 else 2];b=h.get('landing',[4.5,2 if direction>0 else 17]);disc=arc(a,b,t)
+                        a=[4.5,17 if direction>0 else 2];b=h.get('landing',[4.5,2 if direction>0 else 17]);lo,hi=h.get('pull_fraction',(0,1));disc=arc(a,b,lo+(hi-lo)*t)
                         text(d,(960,950),f"PULL  •  {g['teams'][1-active]} → {g['teams'][active]}",32,fill=gold)
                     else:
-                        a=h['thrower'];b=h.get('receiver');disc=np.array(xy(a))
+                        a=h['thrower'];b=h.get('receiver');disc=np.array(xy(a))+np.array([17,14])
                         if b:
-                            pts=[tuple(arc(a,b,z)) for z in np.linspace(0,1,35)];d.line(pts,fill='#d9bc64',width=3)
-                            flight=t;landing=h.get('turnover_spot',b) if h.get('throw_result')=='interception' else b;disc=arc(a,landing,flight)
+                            landing=throw_endpoint(h)
+                            flight=min(1,t/.75) if h.get('throw_result')=='drop' else t
+                            pts=[tuple(arc(a,landing,z)) for z in np.linspace(0,flight,35)];d.line(pts,fill='#d9bc64',width=3)
+                            disc=arc(a,landing,flight)
+                            if h.get('throw_result')=='drop':
+                                disc+=drop_skid(t)
+                                if t>.75:
+                                    start=np.array(xy(landing))
+                                    d.line((tuple(start+np.array([4,18])),tuple(disc+np.array([0,4]))),fill='#d4c5a0',width=3)
+                                    text(d,(disc[0]+20,disc[1]+25),'DROP',20,fill=gold)
                             for lag in (.06,.12,.18):
                                 p=arc(a,landing,max(0,flight-lag));r=max(2,6-lag*20);d.ellipse((p[0]-r,p[1]-r,p[0]+r,p[1]+r),fill='#bdc9bd')
                             text(d,(960,950),f"CATCH CHANCE {h['p']:.0%}   •   {h.get('throw_result','').upper()}",28)
                         if kind=='run':text(d,(960,950),'COVER RUN' if h.get('phase')=='rundown' else 'DISC PICKUP',28,fill=gold)
                         for j,mode in enumerate(h['_modes']):
                             if mode.startswith(('poach','double')) or h['_switch']:
-                                x,y=xy(h['absolute_d'][j]);label='SWITCH' if h['_switch'] else mode.split('_')[0].upper()
+                                x,y=xy(defense[j]);label=(mode.split('_')[0].upper()+(' / SW' if h['_switch'] else '')) if mode.startswith(('poach','double')) else 'SWITCH'
                                 box=d.textbbox((0,0),label,font=fonts[20]);w=box[2]+16
                                 d.rounded_rectangle((x-w/2,y-60,x+w/2,y-30),radius=5,fill=bg);text(d,(x,y-45),label,20)
                     x,y=disc;d.ellipse((x-9,y-5,x+9,y+5),fill=white,outline=gold,width=2)
@@ -296,10 +348,15 @@ def video(g,out,n,max_seconds=150,no_audio=False,points=None):
                         text(d,(1630,940),'3x',32,fill=gold)
                 proc.stdin.write(im.tobytes())
                 snap=('interception_hold_start' if k==0 else 'interception_hold_end' if k==30 else None) if kind=='hold' and h.get('throw_result')=='interception' else kind if kind in ('title','pull','run','final') else 'goal_replay' if kind=='replay' and h['goal'] else 'turnover' if kind=='play' and is_turn and t>.8 else None
-                if kind=='fast':snap='fast_forward'
+                if kind=='set' and h.get('phase'):snap='after_pull'
+                if kind in ('play','hold') and h.get('throw_result')=='interception' and t>.9:snap='interception'
+                if kind in ('play','hold') and h.get('throw_result')=='drop' and t>.95:snap='drop'
+                if kind in ('play','fast') and any(m.startswith('double') for m in h['_modes']) and t>.5:snap='double'
+                if kind=='fast' and snap!='double':snap='fast_forward'
                 if kind=='point_card' and h['point']>rows[0]['point']:snap='between_points'
                 if kind in ('play','fast') and h['point']==rows[0]['point'] and h.get('receiver') and 7<=h['receiver'][1]<=12 and t>.65:snap='midfield'
                 if kind=='run' and h.get('phase')=='rundown' and t>.5:snap='rundown'
+                if kind=='pull' and h.get('pull_fraction',(0,1))[1]<.5:snap=None
                 if snap and snap not in snapshots and (kind not in ('pull','replay') or t>.5):
                     snapshots[snap]={'frame':frame_index,'seconds':frame_index/30}
                 frame_index+=1

@@ -67,6 +67,36 @@ class BroadcastTests(unittest.TestCase):
                 count+=1
         self.assertGreater(count,500)
 
+    def test_labels_anchor_to_interpolated_players(self):
+        # Includes holder swaps, turnovers, and both attack directions.
+        for before,h in zip(self.rows,self.rows[1:]):
+            players={key:.7*np.array(before['players'][key])+.3*np.array(p)
+                     for key,p in h['players'].items()}
+            offense,defense=r.role_positions(h,players)
+            actual_o,actual_d=r.role_positions(h,h['players'])
+            np.testing.assert_array_equal(actual_o,h['absolute_o'])
+            np.testing.assert_array_equal(actual_d,h['absolute_d'])
+            for k in range(3):
+                np.testing.assert_array_equal(defense[k],players[h['defense_keys'][k]])
+                np.testing.assert_array_equal(offense[k],players[h['offense_keys'][k]])
+            self.assertEqual(set(h['offense_keys'])|set(h['defense_keys']),set(players))
+        # Drawing code uses these exact positions for mode labels AND seal.
+        import inspect
+        source=inspect.getsource(r.video)
+        self.assertIn("xy(defense[j]);label=",source)
+        self.assertIn("xy(defense[h['marks'].index(0)])",source)
+
+    def test_throw_outcome_geometry(self):
+        h=dict(thrower=[3,2],receiver=[3,12],turnover_spot=[3,7],throw_result='interception')
+        self.assertEqual(r.throw_endpoint(h),[3,7])
+        h['throw_result']='drop'
+        self.assertEqual(r.throw_endpoint(h),[3,12])
+        np.testing.assert_array_equal(r.drop_skid(.5),[0,0])
+        self.assertGreater(np.linalg.norm(r.drop_skid(1)),20)
+        np.testing.assert_array_equal(r.drop_skid(1),r.drop_skid(2))
+        h['throw_result']='throwaway'
+        self.assertGreater(r.throw_endpoint(h)[1],12)
+
     def test_pacing_and_audio(self):
         schedule=r.broadcast_schedule(self.rows,None)
         self.assertTrue(all(n==45 for kind,h,prev,n in schedule if kind=='hold'))
