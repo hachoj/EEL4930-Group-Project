@@ -333,8 +333,35 @@ def render_llm_prompt(o,d,side,c,max_hold,marks,score=None,target=10,defense_inf
     lines.append('Return only named-field JSON, for example: '+json.dumps(example))
     return '\n'.join(lines),menu
 
-def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10,action_info=None,defense_info=None,team=None):
+def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10,action_info=None,defense_info=None,team=None,session=None):
     prompt,menu=render_llm_prompt(o,d,side,c,max_hold,marks,score,target,defense_info,team)
+    def parse(answer):
+        if isinstance(answer,str):answer=json.loads(re.search(r'\{[^{}]*\}',answer).group())
+        if side==0:
+            x=[o[0][:]]+[menu[label][answer['move_'+label]] for label in ('B','C')];y=[p[:] for p in d];m=marks[:]
+            r=['hold','throw_B','throw_C'].index(answer['action'])
+            if not r and c==max_hold-1:raise ValueError('forced throw')
+            info=dict(action=answer['action'],intents={label:answer['move_'+label] for label in ('B','C')})
+        else:
+            y=[menu[f'D{k+1}'][answer[f'D{k+1}']] for k in range(3)];x=[p[:] for p in o];m=marks[:];r=0
+            for k in range(3):
+                token=answer[f'D{k+1}']
+                if token.startswith('switch_D'):
+                    partner=int(token[-1])-1
+                    if partner==k or answer[f'D{partner+1}']!=f'switch_D{k+1}':raise ValueError('nonreciprocal switch')
+                    m[k]=marks[partner]
+            pairs=[(k,int(answer[f'D{k+1}'][-1])-1) for k in range(3) if answer[f'D{k+1}'].startswith('switch_D')]
+            info=dict(modes={f'D{k+1}':answer[f'D{k+1}'] for k in range(3)},switch=list(pairs[0]) if pairs else None)
+        x,y=u.resolve(x,y,side,o,d)
+        if action_info is not None:action_info.update(info)
+        return x,y,r,m
+    if session is not None:
+        before=session.calls
+        result=session.request(prompt,parse,'decision')
+        if result is None:
+            session.scripted_fallbacks+=1
+            result=scripted(o,d,side,c,max_hold,marks,action_info)
+        return (*result,session.calls-before)
     cache=out/'cache';cache.mkdir(parents=True,exist_ok=True);f=cache/(hashlib.sha256((model+prompt).encode()).hexdigest()+'.json')
     calls=0
     for attempt in range(2):
@@ -342,36 +369,23 @@ def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10,action_info=Non
             if f.exists():answer=json.loads(f.read_text())
             else:
                 calls+=1;proc=subprocess.run(['claude','-p','--model',model,'--output-format','json',prompt],capture_output=True,text=True,timeout=120,check=True)
-                envelope=json.loads(proc.stdout);answer=envelope.get('result',envelope)
-                if isinstance(answer,str):answer=json.loads(re.search(r'\{[^{}]*\}',answer).group())
-            if side==0:
-                x=[o[0][:]]+[menu[label][answer['move_'+label]] for label in ('B','C')];y=[p[:] for p in d];m=marks[:]
-                r=['hold','throw_B','throw_C'].index(answer['action'])
-                if not r and c==max_hold-1:raise ValueError('forced throw')
-            else:
-                y=[menu[f'D{k+1}'][answer[f'D{k+1}']] for k in range(3)];x=[p[:] for p in o];m=marks[:];r=0
-                for k in range(3):
-                    token=answer[f'D{k+1}']
-                    if token.startswith('switch_D'):
-                        partner=int(token[-1])-1
-                        if partner==k or answer[f'D{partner+1}']!=f'switch_D{k+1}':raise ValueError('nonreciprocal switch')
-                        m[k]=marks[partner]
-            if action_info is not None:
-                if side==0:action_info.update(action=answer['action'],intents={label:answer['move_'+label] for label in ('B','C')})
-                else:
-                    pairs=[(k,int(answer[f'D{k+1}'][-1])-1) for k in range(3) if answer[f'D{k+1}'].startswith('switch_D')]
-                    action_info.update(modes={f'D{k+1}':answer[f'D{k+1}'] for k in range(3)},switch=list(pairs[0]) if pairs else None)
-            x,y=u.resolve(x,y,side,o,d);tmp=f.with_suffix(f'.{os.getpid()}.tmp');tmp.write_text(json.dumps(answer));tmp.replace(f);return x,y,r,m,calls
-        except (ValueError,KeyError,TypeError,AttributeError):
+                envelope=json.loads(proc.stdout)
+                if envelope.get('is_error'):raise ValueError('CLI error')
+                answer=envelope.get('result',envelope)
+            result=parse(answer)
+            tmp=f.with_suffix(f'.{os.getpid()}.tmp');tmp.write_text(json.dumps(answer));tmp.replace(f)
+            return (*result,calls)
+        except (ValueError,KeyError,TypeError,AttributeError,IndexError,subprocess.SubprocessError,OSError):
             if f.exists():f.unlink()
     return (*scripted(o,d,side,c,max_hold,marks,action_info),calls)
 
-def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='haiku',out=Path('outputs_dev/v9'),first=0,pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3,cover_speed=3):
+def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='haiku',out=Path('outputs_dev/v9'),first=0,pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3,cover_speed=3,session=None):
     global PRESSURE
     PRESSURE=pressure
     if not 0<=pressure<=1:raise ValueError('pressure must be in [0,1]')
     if solver is not None and hasattr(solver,'pressure') and solver.pressure!=pressure:raise ValueError('solver pressure mismatch')
     if solver is not None and hasattr(solver,'pull_config') and solver.pull_config!=(pull_min,pull_max,pull_run_turns,cover_speed):raise ValueError('solver pull configuration mismatch')
+    started=time.monotonic();snapshot=session.snapshot() if session else None
     rng=random.Random(seed);teams=[team0,team1];active=first
     o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns,cover_speed)
     pulls=[dict(pull,team=active,start_turn=1)]
@@ -384,7 +398,7 @@ def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='ha
             x,y,r,m=solver.concrete(o,d,side,c,marks);action_info.update(getattr(solver,'last_action',{}))
         elif coach=='Scripted':x,y,r,m=scripted(o,d,side,c,max_hold,marks,action_info)
         else:
-            x,y,r,m,ncalls=llm(o,d,side,c,max_hold,marks,model,out,scores,target,action_info,defense_info,active if side==0 else 1-active);calls+=ncalls
+            x,y,r,m,ncalls=llm(o,d,side,c,max_hold,marks,model,out,scores,target,action_info,defense_info,active if side==0 else 1-active,session);calls+=ncalls
         if side==0 and c==max_hold-1 and not r:raise RuntimeError('illegal forced hold')
         if side==1:defense_info=action_info.copy()
         rec=dict(action_names=action_info,turn=turn+1,side=side,team=active,coach=coach,hold_counter=c,o=x,d=y,marks=m,thrower=o[0],receiver=x[r] if r else None)
@@ -403,6 +417,8 @@ def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='ha
         rec['score']=scores[:];history.append(rec)
         if event:
             possessions.append(dict(team=active,start_turn=beg+1,end_turn=turn+1,turns=turn+1-beg,outcome=event,score=scores[:],turnover_spot=spot,start_spot=start_spot,throws=pos_throws,completed=pos_caught));beg=turn+1
+            if event=='score' and session is not None:
+                session.point_feedback(teams,active,scores,possessions)
             if max(scores)>=target:break
             if event=='score':
                 o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns,cover_speed)
@@ -411,7 +427,16 @@ def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='ha
             defense_info=None
             active=1-active;side=0;c=0;pos_throws=0;pos_caught=0;start_spot=o[0][:]
         else:side=1-side
-    return dict(model=model,pressure=pressure,pull_config=[pull_min,pull_max,pull_run_turns,cover_speed],pulls=pulls,teams=teams,seed=seed,first=first,score=scores,finished=max(scores)>=target,safety_cap_triggered=max(scores)<target,turns=len(history),throws=throws,completed=caught,llm_calls=calls,llm_decisions=sum(h['coach']=='LLM' for h in history),possessions=possessions,history=history)
+    result=dict(model=model,pressure=pressure,pull_config=[pull_min,pull_max,pull_run_turns,cover_speed],pulls=pulls,teams=teams,seed=seed,first=first,score=scores,finished=max(scores)>=target,safety_cap_triggered=max(scores)<target,turns=len(history),throws=throws,completed=caught,llm_calls=calls,llm_decisions=sum(h['coach']=='LLM' for h in history),possessions=possessions,history=history)
+
+    if session is not None:
+        from learning import game_metrics
+        metrics=game_metrics(result)
+        lessons=session.game_feedback(metrics)
+        result.update(lessons=lessons,accumulated_lessons=session.lessons[:],learning=session.since(snapshot),metrics=metrics)
+        result['llm_calls']=result['learning']['calls']
+    if session is not None:result['wall_seconds']=time.monotonic()-started
+    return result
 
 class LocalUnpickler(pickle.Unpickler):
     def find_class(self,module,name):
@@ -437,17 +462,35 @@ def summarize(games):
     return dict(n=len(games),final_scores=dict(sorted(dist.items())),wins_team0=sum(g['score'][0]>g['score'][1] for g in games),points_per_possession=[sum(p['outcome']=='score' for p in poss if p['team']==t)/max(1,sum(p['team']==t for p in poss)) for t in (0,1)],completion_rate=sum(g['completed'] for g in games)/max(1,sum(g['throws'] for g in games)),throws=sum(g['throws'] for g in games),mean_turns=float(np.mean([g['turns'] for g in games])),mean_coach_decisions=float(np.mean([g['turns']/2 for g in games])),safety_cap_triggers=sum(g['safety_cap_triggered'] for g in games),possessions=len(poss))
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--cover-speed',type=int,default=3);p.add_argument('--pressure',type=float,default=1.);p.add_argument('--pull-min',type=int,default=2);p.add_argument('--pull-max',type=int,default=3);p.add_argument('--pull-run-turns',type=int,default=3);p.add_argument('--team0',choices=['Calculator','Scripted','LLM'],default='Calculator');p.add_argument('--team1',choices=['Calculator','Scripted','LLM'],default='Scripted');p.add_argument('--n',type=int,default=20);p.add_argument('--jobs',type=int,default=2);p.add_argument('--samples',type=int,default=8);p.add_argument('--max-hold',type=int,default=3);p.add_argument('--target',type=int,default=10);p.add_argument('--safety-cap',type=int,default=20000);p.add_argument('--model',choices=['haiku','opus'],default='haiku');p.add_argument('--out',type=Path,default=Path('outputs_dev/v9'));p.add_argument('--seed',type=int,default=1700);p.add_argument('--rebuild',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--learn',action='store_true');p.add_argument('--session-id');p.add_argument('--cover-speed',type=int,default=3);p.add_argument('--pressure',type=float,default=1.);p.add_argument('--pull-min',type=int,default=2);p.add_argument('--pull-max',type=int,default=3);p.add_argument('--pull-run-turns',type=int,default=3);p.add_argument('--team0',choices=['Calculator','Scripted','LLM'],default='Calculator');p.add_argument('--team1',choices=['Calculator','Scripted','LLM'],default='Scripted');p.add_argument('--n',type=int,default=20);p.add_argument('--jobs',type=int,default=2);p.add_argument('--samples',type=int,default=8);p.add_argument('--max-hold',type=int,default=3);p.add_argument('--target',type=int,default=10);p.add_argument('--safety-cap',type=int,default=20000);p.add_argument('--model',choices=['haiku','opus'],default='haiku');p.add_argument('--out',type=Path,default=Path('outputs_dev/v9'));p.add_argument('--seed',type=int,default=1700);p.add_argument('--rebuild',action='store_true');a=p.parse_args()
     if min(a.max_hold,a.target,a.n,a.jobs,a.samples,a.cover_speed)<1:p.error('positive counts required')
     if not 0<=a.pressure<=1:p.error('pressure must be in [0,1]')
+    if a.learn and (a.team0,a.team1).count('LLM')!=1:p.error('--learn requires exactly one LLM team')
+    if a.session_id and not a.learn:p.error('--session-id requires --learn')
     a.out.mkdir(parents=True,exist_ok=True);cache=a.out/'solver.pkl';start=time.monotonic()
     if 'Calculator' in (a.team0,a.team1):
         if a.rebuild or not cache.exists():Solver(a.samples,a.max_hold,out=a.out,pressure=a.pressure,pull_min=a.pull_min,pull_max=a.pull_max,pull_run_turns=a.pull_run_turns,cover_speed=a.cover_speed)
         else:
             s=load_solver(cache)
             if getattr(s,'pressure',None)!=a.pressure or getattr(s,'pull_config',None)!=(a.pull_min,a.pull_max,a.pull_run_turns,a.cover_speed) or s.max_hold!=a.max_hold or s.info['samples_per_state']!=a.samples:raise ValueError('cache configuration mismatch; use --rebuild')
-    with concurrent.futures.ProcessPoolExecutor(a.jobs,initializer=init_worker,initargs=(cache,a)) as pool:games=list(pool.map(worker,range(a.n)))
+    if a.learn:
+        from learning import LearningSession, write_learning_metrics
+        session=LearningSession(a.model,a.session_id)
+        a.session_id=session.session_id
+        print('Learning mode: one process, sequential games; --jobs ignored. Session '+session.session_id,flush=True)
+        solver=load_solver(cache) if 'Calculator' in (a.team0,a.team1) else None
+        games=[]
+        for i in range(a.n):
+            g=game(a.team0,a.team1,a.seed+i,solver,a.max_hold,a.target,a.safety_cap,a.model,a.out,i%2,a.pressure,a.pull_min,a.pull_max,a.pull_run_turns,a.cover_speed,session)
+            g['game_index']=i+1;games.append(g)
+            (a.out/f'{a.team0}_vs_{a.team1}_games.json').write_text(json.dumps(games))
+            write_learning_metrics(games,a.out)
+            print(json.dumps({'game':i+1,'score':g['score'],'lessons':g['lessons'],'learning':{k:v for k,v in g['learning'].items() if k!='events'}},indent=2),flush=True)
+    else:
+        with concurrent.futures.ProcessPoolExecutor(a.jobs,initializer=init_worker,initargs=(cache,a)) as pool:games=list(pool.map(worker,range(a.n)))
     prefix=f'{a.team0}_vs_{a.team1}';(a.out/f'{prefix}_games.json').write_text(json.dumps(games));summary=summarize(games);summary['wall_seconds']=time.monotonic()-start
+    if a.learn:
+        summary['learning']={key:sum(g['learning'][key] for g in games) for key in ('calls','failures','session_fallbacks','scripted_fallbacks')}
     (a.out/f'{prefix}_run.json').write_text(json.dumps({**vars(a),'out':str(a.out),'wall_seconds':summary['wall_seconds']},indent=2))
     (a.out/f'{prefix}_summary.json').write_text(json.dumps(summary,indent=2));print(json.dumps(summary,indent=2),flush=True)
 if __name__=='__main__':main()
