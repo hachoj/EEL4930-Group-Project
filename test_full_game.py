@@ -70,7 +70,8 @@ class FullRules(unittest.TestCase):
             g=f.game('Calculator','Calculator',1,Score(),target=2,safety_cap=10)
         self.assertEqual(g['score'],[2,1]);self.assertTrue(g['finished'])
         self.assertEqual(g['history'][1]['team'],1)
-        self.assertIn(g['history'][1]['thrower'][1],range(3))
+        self.assertEqual(g['history'][1]['thrower'],g['pulls'][1]['landing'])
+        self.assertEqual(g['history'][1]['hold_counter'],0)
     def test_llm_reciprocal_switch_and_cache(self):
         o,d=u.start_positions(5,0);marks=u.assign_marks(o,d)
         answer={'D1':'switch_D2','D2':'switch_D1','D3':'poach_deep'}
@@ -218,3 +219,50 @@ class ReadablePrompt(unittest.TestCase):
         self.assertIn('last chosen mode: double_B',prompt)
         for mode in f.MODES:self.assertIn(mode,prompt)
         self.assertIn('switch_D2',prompt)
+
+class PullRules(unittest.TestCase):
+    def test_seeded_pull_and_no_teleport(self):
+        import random
+        for seed in range(100):
+            a=f.pull_setup(random.Random(seed));b=f.pull_setup(random.Random(seed))
+            self.assertEqual(a,b)
+            o,d,marks,pull=a
+            self.assertIn(pull['landing'][1],range(2,4));self.assertEqual(o[0],pull['landing'])
+            frames=pull['frames']
+            for before,after in zip(frames,frames[1:]):
+                for key in ('o','d'):
+                    self.assertLessEqual(np.max(abs(np.array(before[key])-after[key])),1)
+                self.assertTrue(u.unique(after['o'],after['d']))
+            canonical=frames[-1]['o'].copy();pick=pull['pickup_player']
+            canonical[0],canonical[pick]=canonical[pick],canonical[0]
+            self.assertEqual(canonical,o);self.assertEqual(frames[-1]['d'],d)
+            self.assertIn(u.key(o,d),u.INDEX)
+    def test_pressure_scales_both_hazards(self):
+        o=np.array([[[5,1],[5,9],[8,9]]]);d=np.array([[[5,5],[5,8],[9,19]]])
+        ps=[]
+        for pressure in (0,.2,.6,1):
+            p,m=f.throw_model(o,d,1,pressure);ps.append(p[0])
+            self.assertAlmostEqual(p[0]+m.sum(),1)
+        self.assertEqual(ps,sorted(ps,reverse=True))
+        p,m=f.throw_model(o,d,1,0);self.assertEqual(m[0,1:].sum(),0)
+    def test_real_pull_renderer_continuity(self):
+        import render_full as r
+        g=f.game('Scripted','Scripted',82,None,target=2)
+        rows=r.absolute_records(g)
+        for row in rows:
+            if not row.get('setup'):continue
+            frames=row['setup']+[row]
+            for before,after in zip(frames,frames[1:]):
+                for key in before['players']:
+                    self.assertLessEqual(np.max(abs(np.array(before['players'][key])-after['players'][key])),1)
+        schedule=r.broadcast_schedule(rows,3,max_seconds=150)
+        self.assertTrue(any(kind=='run' for kind,*_ in schedule))
+
+    def test_full_game_determinism_and_hold_reset(self):
+        a=f.game('Scripted','Scripted',91,None,target=2,pressure=.2)
+        b=f.game('Scripted','Scripted',91,None,target=2,pressure=.2)
+        self.assertEqual(a,b)
+        for pull in a['pulls']:
+            row=a['history'][pull['start_turn']-1]
+            self.assertEqual(row['hold_counter'],0)
+            self.assertEqual(row['thrower'],pull['landing'])

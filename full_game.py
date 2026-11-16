@@ -6,6 +6,8 @@ from scipy.sparse import csr_matrix
 import ultimate as u
 import joint_calculator as j
 
+PRESSURE=1.0
+
 MODES=['tight_front','tight_behind','trail','poach_lane','poach_deep','double_B','double_C']
 # Independent ordinary tactics, plus reciprocal switches with independent positioning.
 DEF_ACTIONS=[(None,m) for m in itertools.product(range(7),repeat=3)]+[(pair,m) for pair in itertools.combinations(range(3),2) for m in itertools.product(range(7),repeat=3)]
@@ -39,17 +41,19 @@ def defense_candidates(o,d,marks):
         x,y=j.resolve_batch(o,d,1,proposed)
         yield x,y,remap_marks(marks,pair)
 
-def throw_model(o,d,r):
+def throw_model(o,d,r,pressure=None):
     """Return completion and unconditional failure masses [drop,D1,D2,D3]."""
+    pressure=PRESSURE if pressure is None else pressure
+    if not 0<=pressure<=1:raise ValueError("pressure must be in [0,1]")
     a=o[:,r]-o[:,0];length=np.linalg.norm(a,axis=1)
     b=d-o[:,r,None];norm=np.linalg.norm(b,axis=2)
     den=length[:,None]*norm
     cos=np.divide((-a[:,None]*b).sum(-1),den,out=np.ones_like(den),where=den!=0)
-    receiver=1-np.prod(1-.6*np.maximum(0,1-norm/3)*(.25+.75*(1+cos)/2),axis=1)
+    receiver=1-np.prod(1-.6*pressure*np.maximum(0,1-norm/3)*(.25+.75*(1+cos)/2),axis=1)
     v=d-o[:,0,None];den2=(a*a).sum(1)
     projection=np.divide((v*a[:,None]).sum(-1),den2[:,None],out=np.zeros_like(norm),where=den2[:,None]!=0)
     closest=o[:,0,None]+np.clip(projection,0,1)[:,:,None]*a[:,None]
-    lane=.06*np.maximum(0,1-np.linalg.norm(d-closest,axis=2)/1.5)*((projection>.1)&(projection<.98))
+    lane=.06*pressure*np.maximum(0,1-np.linalg.norm(d-closest,axis=2)/1.5)*((projection>.1)&(projection<.98))
     base=1/(1+np.exp(-(4.15701518-.06417449*length*5)))
     base*=np.where(u.force.is_break(o[:,0],o[:,r]),u.force.BREAK_MULTIPLIER,1.)
     p=base*(1-receiver)*np.prod(1-lane,axis=1)
@@ -87,6 +91,41 @@ def formation(spot):
     for p in o:d.append(min((q for q in cells if q not in o+d),key=lambda q:math.dist(q,[p[0],min(19,p[1]+1)])))
     return o,u.force.seal(o,d,u.assign_marks(o,d))
 
+def pull_setup(rng,depth_min=2,depth_max=3,run_turns=3):
+    """Scripted setup, not coach decisions. Frames preserve lineup identities.
+
+    Receiver walks to sampled landing; teammates wait during pickup. Then both
+    teams run legal one-square steps for run_turns. Holder remains stationary.
+    """
+    if not 0<=depth_min<=depth_max<=16 or run_turns<0:raise ValueError('invalid pull configuration')
+    o=[[2,2],[5,2],[8,2]];d=[[2,17],[5,17],[8,17]]
+    depth=rng.choices([2,3],weights=[.6,.4])[0] if (depth_min,depth_max)==(2,3) else rng.randint(depth_min,depth_max)
+    landing=[rng.randrange(10),depth]
+    pick=min(range(3),key=lambda k:math.dist(o[k],landing))
+    frames=[dict(phase='flight',o=[q[:] for q in o],d=[q[:] for q in d])]
+    def step(targets,side):
+        nonlocal o,d
+        team=o if side==0 else d;other=d if side==0 else o
+        proposed=[];occupied={tuple(q) for q in team+other}
+        for k,q in enumerate(team):
+            occupied.remove(tuple(q))
+            cells=[u.move(q,delta) for delta in u.DELTAS]
+            dest=min((v for v in cells if tuple(v) not in occupied),key=lambda v:(math.dist(v,targets[k]),v))
+            proposed.append(dest);occupied.add(tuple(dest))
+        x,y=u.resolve(proposed,d,0,o,d) if side==0 else u.resolve(o,proposed,1,o,d)
+        o,d=x,y
+    while o[pick]!=landing:
+        targets=[q[:] for q in o];targets[pick]=landing
+        step(targets,0)
+        frames.append(dict(phase='pickup',o=[q[:] for q in o],d=[q[:] for q in d]))
+        if len(frames)>30:raise RuntimeError('pull pickup blocked')
+    for _ in range(run_turns):
+        targets=[([max(0,min(9,landing[0]+(-3 if k<pick else 3))),min(16,landing[1]+3)] if k!=pick else landing) for k in range(3)]
+        step(targets,0);step(o,1)
+        frames.append(dict(phase='rundown',o=[q[:] for q in o],d=[q[:] for q in d]))
+    o[0],o[pick]=o[pick],o[0]
+    return o,d,u.assign_marks(o,d),dict(landing=landing,pickup_player=pick,frames=frames)
+
 ZONE_CENTERS=[[x,y] for y in (2,7,12,16,18) for x in (1,4,8)]
 RESTART=np.array([u.INDEX[u.key(*formation(p))] for p in ZONE_CENTERS])
 GOAL_START=u.INDEX[u.key(*u.start_positions(0,0))]
@@ -96,7 +135,11 @@ def failure_zones(o,d,r):
     return j.zones(np.array([9,19])-spots)
 
 class Solver:
-    def __init__(self,samples=8,max_hold=3,gamma=.97,tol=1e-7,out=Path('outputs_dev/v7')):
+    def __init__(self,samples=8,max_hold=3,gamma=.97,tol=1e-7,out=Path('outputs_dev/v8'),pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3):
+        self.pressure=pressure
+        self.pull_config=(pull_min,pull_max,pull_run_turns)
+        starts=[pull_setup(random.Random(9500+i),*self.pull_config) for i in range(128)]
+        self.goal_starts=np.array([u.INDEX[u.key(o,d)] for o,d,_,_ in starts])
         start=time.monotonic();self.max_hold=max_hold;self.gamma=gamma;n=len(u.KEYS);self.n=n
         rng=random.Random(1201);reps=[u.representative(k,rng) for k in u.KEYS for _ in range(samples)]
         o=np.array([r[0] for r in reps],dtype=np.int16);d=np.array([r[1] for r in reps],dtype=np.int16);del reps
@@ -108,7 +151,7 @@ class Solver:
             for a,(x,y,r,m) in enumerate(candidates):
                 ids,_=j.transitions(x,y,r,n,m)
                 if r:
-                    p,fail=throw_model(x,y,r);fz=failure_zones(x,y,r)
+                    p,fail=throw_model(x,y,r,pressure);fz=failure_zones(x,y,r)
                     # score column n; opponent restarts n+1..n+15.
                     cols=np.concatenate((ids,*[n+1+fz[:,i] for i in range(4)]))
                     weights=np.concatenate((p,*[fail[:,i] for i in range(4)]))/samples
@@ -123,11 +166,11 @@ class Solver:
             if iteration%20==0:print('solve',iteration,'residual',residual,'seconds',round(time.monotonic()-solve,2),flush=True)
             if residual<tol:break
         if residual>=tol:raise RuntimeError(f'fixed point failed: {residual}')
-        self.info=dict(states=2*n*max_hold,states_per_side=n*max_hold,base_states=n,actions_offense=300,actions_defense=len(DEF_ACTIONS),samples_per_state=samples,max_hold=max_hold,gamma=gamma,build_seconds=build,solve_seconds=time.monotonic()-solve,iterations=iteration+1,residual=residual,error_bound=residual/(1-gamma),convergence='discounted max/min Bellman contraction; hold counter explicit')
+        self.info=dict(pressure=pressure,pull_config=self.pull_config,states=2*n*max_hold,states_per_side=n*max_hold,base_states=n,actions_offense=300,actions_defense=len(DEF_ACTIONS),samples_per_state=samples,max_hold=max_hold,gamma=gamma,build_seconds=build,solve_seconds=time.monotonic()-solve,iterations=iteration+1,residual=residual,error_bound=residual/(1-gamma),convergence='discounted max/min Bellman contraction; hold counter explicit')
         print(json.dumps(self.info),flush=True)
         out.mkdir(parents=True,exist_ok=True);(out/'solver.json').write_text(json.dumps(self.info,indent=2))
         with (out/'solver.pkl').open('wb') as f:pickle.dump(self,f)
-    def tail(self,v):return np.r_[1-self.gamma*v[0,0,GOAL_START],-self.gamma*v[0,0,RESTART]]
+    def tail(self,v):return np.r_[1-self.gamma*np.mean(v[0,0,getattr(self,'goal_starts',np.array([GOAL_START]))]),-self.gamma*v[0,0,RESTART]]
     def backup(self,v):
         nxt=np.empty_like(v);tail=self.tail(v)
         for c in range(self.max_hold):
@@ -144,7 +187,7 @@ class Solver:
     def evaluate(self,x,y,r,marks,c,side):
         ids,_=j.transitions(x,y,r,self.n,marks)
         if not r:return self.gamma*self.V[c+1 if side==0 else c,1-side,ids]
-        p,fail=throw_model(x,y,r);fz=failure_zones(x,y,r)
+        p,fail=throw_model(x,y,r,getattr(self,'pressure',1.));fz=failure_zones(x,y,r)
         success=np.where(ids==self.n,self.tail(self.V)[0],self.gamma*self.V[0,1-side,np.minimum(ids,self.n-1)])
         return p*success+(fail*(-self.gamma*self.V[0,0,RESTART[fz]])).sum(1)
     def concrete(self,o,d,side,c,marks):
@@ -312,8 +355,15 @@ def llm(o,d,side,c,max_hold,marks,model,out,score=None,target=10,action_info=Non
             if f.exists():f.unlink()
     return (*scripted(o,d,side,c,max_hold,marks,action_info),calls)
 
-def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='haiku',out=Path('outputs_dev/v7'),first=0):
-    rng=random.Random(seed);teams=[team0,team1];active=first;o,d=u.start_positions(seed,0);marks=u.assign_marks(o,d)
+def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='haiku',out=Path('outputs_dev/v8'),first=0,pressure=1.,pull_min=2,pull_max=3,pull_run_turns=3):
+    global PRESSURE
+    PRESSURE=pressure
+    if not 0<=pressure<=1:raise ValueError('pressure must be in [0,1]')
+    if solver is not None and hasattr(solver,'pressure') and solver.pressure!=pressure:raise ValueError('solver pressure mismatch')
+    if solver is not None and hasattr(solver,'pull_config') and solver.pull_config!=(pull_min,pull_max,pull_run_turns):raise ValueError('solver pull configuration mismatch')
+    rng=random.Random(seed);teams=[team0,team1];active=first
+    o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns)
+    pulls=[dict(pull,team=active,start_turn=1)]
     scores=[0,0];history=[];possessions=[];c=0;side=0;beg=0;throws=0;caught=0;calls=0;pos_throws=0;pos_caught=0;start_spot=o[0][:]
     defense_info=None
     for turn in range(safety_cap):
@@ -343,12 +393,14 @@ def game(team0,team1,seed,solver,max_hold=3,target=10,safety_cap=20000,model='ha
         if event:
             possessions.append(dict(team=active,start_turn=beg+1,end_turn=turn+1,turns=turn+1-beg,outcome=event,score=scores[:],turnover_spot=spot,start_spot=start_spot,throws=pos_throws,completed=pos_caught));beg=turn+1
             if max(scores)>=target:break
-            if event=='score':o,d=u.start_positions(seed+len(possessions),0);marks=u.assign_marks(o,d)
+            if event=='score':
+                o,d,marks,pull=pull_setup(rng,pull_min,pull_max,pull_run_turns)
+                pulls.append(dict(pull,team=1-active,start_turn=turn+2))
             else:o,d,marks=flip(o,d,spot,interceptor)
             defense_info=None
             active=1-active;side=0;c=0;pos_throws=0;pos_caught=0;start_spot=o[0][:]
         else:side=1-side
-    return dict(teams=teams,seed=seed,first=first,score=scores,finished=max(scores)>=target,safety_cap_triggered=max(scores)<target,turns=len(history),throws=throws,completed=caught,llm_calls=calls,llm_decisions=sum(h['coach']=='LLM' for h in history),possessions=possessions,history=history)
+    return dict(model=model,pressure=pressure,pull_config=[pull_min,pull_max,pull_run_turns],pulls=pulls,teams=teams,seed=seed,first=first,score=scores,finished=max(scores)>=target,safety_cap_triggered=max(scores)<target,turns=len(history),throws=throws,completed=caught,llm_calls=calls,llm_decisions=sum(h['coach']=='LLM' for h in history),possessions=possessions,history=history)
 
 class LocalUnpickler(pickle.Unpickler):
     def find_class(self,module,name):
@@ -366,7 +418,7 @@ def init_worker(path,args):
     if 'Calculator' in (args.team0,args.team1):
         _WORKER=load_solver(path)
 def worker(i):
-    a=_ARGS;return game(a.team0,a.team1,a.seed+i,_WORKER,a.max_hold,a.target,a.safety_cap,a.model,a.out,i%2)
+    a=_ARGS;return game(a.team0,a.team1,a.seed+i,_WORKER,a.max_hold,a.target,a.safety_cap,a.model,a.out,i%2,a.pressure,a.pull_min,a.pull_max,a.pull_run_turns)
 
 def summarize(games):
     dist=collections.Counter(f'{g["score"][0]}-{g["score"][1]}' for g in games)
@@ -374,14 +426,15 @@ def summarize(games):
     return dict(n=len(games),final_scores=dict(sorted(dist.items())),wins_team0=sum(g['score'][0]>g['score'][1] for g in games),points_per_possession=[sum(p['outcome']=='score' for p in poss if p['team']==t)/max(1,sum(p['team']==t for p in poss)) for t in (0,1)],completion_rate=sum(g['completed'] for g in games)/max(1,sum(g['throws'] for g in games)),throws=sum(g['throws'] for g in games),mean_turns=float(np.mean([g['turns'] for g in games])),mean_coach_decisions=float(np.mean([g['turns']/2 for g in games])),safety_cap_triggers=sum(g['safety_cap_triggered'] for g in games),possessions=len(poss))
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--team0',choices=['Calculator','Scripted','LLM'],default='Calculator');p.add_argument('--team1',choices=['Calculator','Scripted','LLM'],default='Scripted');p.add_argument('--n',type=int,default=20);p.add_argument('--jobs',type=int,default=2);p.add_argument('--samples',type=int,default=8);p.add_argument('--max-hold',type=int,default=3);p.add_argument('--target',type=int,default=10);p.add_argument('--safety-cap',type=int,default=20000);p.add_argument('--model',choices=['haiku','opus'],default='haiku');p.add_argument('--out',type=Path,default=Path('outputs_dev/v7'));p.add_argument('--seed',type=int,default=1700);p.add_argument('--rebuild',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--pressure',type=float,default=1.);p.add_argument('--pull-min',type=int,default=2);p.add_argument('--pull-max',type=int,default=3);p.add_argument('--pull-run-turns',type=int,default=3);p.add_argument('--team0',choices=['Calculator','Scripted','LLM'],default='Calculator');p.add_argument('--team1',choices=['Calculator','Scripted','LLM'],default='Scripted');p.add_argument('--n',type=int,default=20);p.add_argument('--jobs',type=int,default=2);p.add_argument('--samples',type=int,default=8);p.add_argument('--max-hold',type=int,default=3);p.add_argument('--target',type=int,default=10);p.add_argument('--safety-cap',type=int,default=20000);p.add_argument('--model',choices=['haiku','opus'],default='haiku');p.add_argument('--out',type=Path,default=Path('outputs_dev/v8'));p.add_argument('--seed',type=int,default=1700);p.add_argument('--rebuild',action='store_true');a=p.parse_args()
     if min(a.max_hold,a.target,a.n,a.jobs,a.samples)<1:p.error('positive counts required')
+    if not 0<=a.pressure<=1:p.error('pressure must be in [0,1]')
     a.out.mkdir(parents=True,exist_ok=True);cache=a.out/'solver.pkl';start=time.monotonic()
     if 'Calculator' in (a.team0,a.team1):
-        if a.rebuild or not cache.exists():Solver(a.samples,a.max_hold,out=a.out)
+        if a.rebuild or not cache.exists():Solver(a.samples,a.max_hold,out=a.out,pressure=a.pressure,pull_min=a.pull_min,pull_max=a.pull_max,pull_run_turns=a.pull_run_turns)
         else:
             s=load_solver(cache)
-            if s.max_hold!=a.max_hold or s.info['samples_per_state']!=a.samples:raise ValueError('cache configuration mismatch; use --rebuild')
+            if getattr(s,'pressure',None)!=a.pressure or getattr(s,'pull_config',None)!=(a.pull_min,a.pull_max,a.pull_run_turns) or s.max_hold!=a.max_hold or s.info['samples_per_state']!=a.samples:raise ValueError('cache configuration mismatch; use --rebuild')
     with concurrent.futures.ProcessPoolExecutor(a.jobs,initializer=init_worker,initargs=(cache,a)) as pool:games=list(pool.map(worker,range(a.n)))
     prefix=f'{a.team0}_vs_{a.team1}';(a.out/f'{prefix}_games.json').write_text(json.dumps(games));summary=summarize(games);summary['wall_seconds']=time.monotonic()-start
     (a.out/f'{prefix}_run.json').write_text(json.dumps({**vars(a),'out':str(a.out),'wall_seconds':summary['wall_seconds']},indent=2))

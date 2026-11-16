@@ -149,3 +149,37 @@ Switches are separate assignment-change counts (overlap positioning modes).
 For LLM histories, tactic modes are reported as unknown: positions alone cannot
 recover its intended action. Figures pool supplied games, including both teams
 in self-play; PPP denominators are completed possessions.
+
+
+### v8 real pulls and pressure calibration
+
+`full_game.py` now defaults to `outputs_dev/v8/`. Each point starts with receivers
+on row 2 and pullers on row 17. Default pickup is uniform across x, with 60/40
+probability on rows 2/3 (the own goal line is the boundary at y=2.5). Override
+with `--pull-min LO --pull-max HI`; nondefault ranges are discrete uniform.
+`--pull-run-turns 3` controls the cover/setup run after pickup. Setup is scripted,
+not coach decisions: the nearest receiver legally walks to the landing square,
+then holds while teammates spread and pullers run down. Every setup frame is
+saved under `pulls`, independently of the coach-turn history, and the first
+live hold counter is zero. No pull/setup movement exceeds one grid square.
+
+`--pressure P` (0..1, default 1) multiplies both the receiver-pressure 0.6
+coefficient and lane hazard 0.06 coefficient. UFA distance probability is
+unchanged. Use a separate cache/output directory per P, sample count and pull
+configuration; incompatible caches are refused. Processes run one game at a
+time; the game sets process-local pressure for Scripted and LLM option tables,
+while Calculator evaluations carry their own pressure explicitly. v1 is untouched.
+
+```sh
+uv run python calibrate.py --pressures .2 .6 1 --samples 1 --n 10 --target 10
+uv run python full_game.py --pressure .2 --target 3 --n 1 --samples 1 --out outputs_dev/v8/demo
+uv run python render_full.py outputs_dev/v8/demo/Calculator_vs_Scripted_games.json --highlights 4 --out outputs_dev/v8/media
+```
+
+`calibrate.py` writes histories, cache/timings, a sweep table and selected pressure
+with target comparisons. Selection uses equal squared relative errors in
+Calculator self-play hold rate and turnovers/point. Other statistics are diagnostics,
+not hidden selection criteria. A small sampled model/grid and ten games per
+pairing give exploratory evidence; this does not establish a calibrated model.
+The renderer uses recorded pull flight/pickup/run-down frames for v8, and retains
+presentation-only pulls for legacy files. New action names replace tactic guesses.

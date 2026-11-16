@@ -43,7 +43,10 @@ def records(g):
     prev=None
     for raw in g['history']:
         h=dict(raw);h['_switch']=False;h['_modes']=[]
-        if h['side']==1:h['_modes'],h['_switch']=recover(h,prev)
+        if h['side']==1:
+            if h.get('action_names',{}).get('modes'):
+                h['_modes']=[h['action_names']['modes'][f'D{k+1}'] for k in range(3)];h['_switch']=bool(h['action_names'].get('switch'))
+            else:h['_modes'],h['_switch']=recover(h,prev)
         yield h,prev
         prev=h
 
@@ -58,6 +61,7 @@ def absolute_records(g):
     and collision displacement are engine exceptions, not camera movements.
     """
     result=[]; ids=[[0,1,2],[0,1,2]]; rotated=False; previous=None
+    pulls={p['start_turn']:p for p in g.get('pulls',[])}
     for h,_ in records(g):
         t=h['team']
         if previous:
@@ -73,6 +77,16 @@ def absolute_records(g):
                 r=previous['o'].index(previous['receiver'])
                 ids[t][0],ids[t][r]=ids[t][r],ids[t][0]
         def point(p):return [9-p[0],19-p[1]] if rotated else list(p)
+        pull=pulls.get(h['turn'])
+        setup=[]
+        if pull:
+            ids=[[0,1,2],[0,1,2]]
+            for frame in pull['frames']:
+                setup.append(dict(h,players={(team,k):point(p) for team,key in ((t,'o'),(1-t,'d')) for k,p in enumerate(frame[key])},absolute_o=[point(p) for p in frame['o']],absolute_d=[point(p) for p in frame['d']],phase=frame['phase'],landing=point(pull['landing']),thrower=point(pull['landing']),receiver=None,_modes=[],_switch=False,goal=False,direction=-1 if rotated else 1,point=len(result)+1))
+            for frame in setup:
+                frame.pop('throw_result',None);frame.pop('turnover_spot',None)
+                frame['score']=previous['score'][:] if previous else [0,0]
+            pick=pull['pickup_player'];ids[t][0],ids[t][pick]=ids[t][pick],ids[t][0]
         row=dict(h);row['players']={}
         for team,key in ((t,'o'),(1-t,'d')):
             for k,p in enumerate(h[key]):row['players'][(team,ids[team][k])]=point(p)
@@ -82,6 +96,8 @@ def absolute_records(g):
         row['direction']=-1 if rotated else 1
         row['point']=1+sum(p['outcome']=='score' and p['end_turn']<h['turn'] for p in g['possessions'])
         row['goal']=h.get('throw_result')=='caught' and h['receiver'][1]>=17
+        for frame in setup:frame['point']=row['point']
+        if setup:row['setup']=setup
         result.append(row);previous=h
     return result
 
@@ -104,8 +120,14 @@ def broadcast_schedule(rows,highlights,max_seconds=150):
         for i,h in enumerate(rows):
             prev=rows[i-1] if i else None
             if i==0 or prev['goal']:
-                schedule.extend([('pull',h,prev,30),('set',h,None,30)])
+                if h.get('setup'):
+                    setup=h['setup']
+                    schedule.append(('pull',setup[0],None,30))
+                    for before,after in zip(setup,setup[1:]):schedule.append(('run',after,before,21))
+                    schedule.append(('set',setup[-1],None,30))
+                else:schedule.extend([('pull',h,prev,30),('set',h,None,30)])
             if i not in selected:continue
+            if h.get('setup'):prev=h['setup'][-1]
             schedule.append(('play',h,prev,30 if h.get('receiver') else 21))
             if h['goal'] or h.get('throw_result') in ('drop','interception'):
                 schedule.append(('hold',h,None,45))
@@ -197,7 +219,7 @@ def video(g,out,n,max_seconds=150,no_audio=False):
                     if kind=='title':
                         text(d,(960,830),'Lettered jerseys = players    •    White disc + trail = possession',28)
                         text(d,(960,880),'Dashed lines = marks    •    Gold ring = force seal',28)
-                        text(d,(960,930),'POACH / DOUBLE / SWITCH = reconstructed defensive plays',24,fill='#a9bdc9')
+                        text(d,(960,930),'POACH / DOUBLE / SWITCH = defensive plays',24,fill='#a9bdc9')
                 else:
                     active=h['team'];direction=h['direction'];is_turn=h.get('throw_result') in ('drop','interception')
                     # Score bug and permanent camera; only the attack arrow reverses.
@@ -207,7 +229,7 @@ def video(g,out,n,max_seconds=150,no_audio=False):
                     attack=-direction if receiving!=active else direction
                     text(d,(960,205),f"POINT {h['point']}    |    {g['teams'][receiving]} BALL   {'→' if attack>0 else '←'}",32)
                     players=h['players']
-                    if kind=='pull':
+                    if kind=='pull' and not h.get('phase'):
                         # New receiving offense attacks direction; pull travels from opposite goal line.
                         players={}
                         for team in (0,1):
@@ -215,7 +237,7 @@ def video(g,out,n,max_seconds=150,no_audio=False):
                             for j in range(3):players[(team,j)]=[2+j*2.5,end]
                     elif prev and not prev['goal']:
                         players={key:(np.array(prev['players'][key])*(1-s)+np.array(p)*s) for key,p in players.items()}
-                    if kind!='pull':
+                    if kind not in ('pull','run','set'):
                         for j,m in enumerate(h['marks']):
                             a=xy(h['absolute_d'][j]);b=xy(h['absolute_o'][m]);v=np.array(b)-a
                             for z in np.arange(0,1,.10):d.line((tuple(np.array(a)+z*v),tuple(np.array(a)+min(z+.045,1)*v)),fill='#8aa99b',width=2)
@@ -223,7 +245,7 @@ def video(g,out,n,max_seconds=150,no_audio=False):
                     for (team,j),p in players.items():
                         x,y=xy(p);d.ellipse((x-22,y-22,x+22,y+22),fill=COLORS[team],outline=white,width=3);text(d,(x,y),'ABC'[j],24)
                     if kind=='pull':
-                        a=[4.5,17 if direction>0 else 2];b=[4.5,2 if direction>0 else 17];disc=arc(a,b,t)
+                        a=[4.5,17 if direction>0 else 2];b=h.get('landing',[4.5,2 if direction>0 else 17]);disc=arc(a,b,t)
                         text(d,(960,950),f"PULL  •  {g['teams'][1-active]} → {g['teams'][active]}",32,fill=gold)
                     else:
                         a=h['thrower'];b=h.get('receiver');disc=np.array(xy(a))
@@ -233,6 +255,7 @@ def video(g,out,n,max_seconds=150,no_audio=False):
                             for lag in (.06,.12,.18):
                                 p=arc(a,landing,max(0,flight-lag));r=max(2,6-lag*20);d.ellipse((p[0]-r,p[1]-r,p[0]+r,p[1]+r),fill='#bdc9bd')
                             text(d,(960,950),f"CATCH CHANCE {h['p']:.0%}   •   {h.get('throw_result','').upper()}",28)
+                        if kind=='run':text(d,(960,950),'COVER RUN' if h.get('phase')=='rundown' else 'DISC PICKUP',28,fill=gold)
                         for j,mode in enumerate(h['_modes']):
                             if mode.startswith(('poach','double')) or h['_switch']:
                                 x,y=xy(h['absolute_d'][j]);label='SWITCH' if h['_switch'] else mode.split('_')[0].upper()
@@ -247,7 +270,8 @@ def video(g,out,n,max_seconds=150,no_audio=False):
                         d.rounded_rectangle((430,305,1490,375),radius=10,fill=bg);text(d,(960,340),banner,36,fill=gold)
                         if kind=='replay':text(d,(1680,238),'SLOW REPLAY',20,fill=gold)
                 proc.stdin.write(im.tobytes())
-                snap=('interception_hold_start' if k==0 else 'interception_hold_end' if k==30 else None) if kind=='hold' and h.get('throw_result')=='interception' else kind if kind in ('title','pull','final') else 'goal_replay' if kind=='replay' and h['goal'] else 'turnover' if kind=='play' and is_turn and t>.8 else None
+                snap=('interception_hold_start' if k==0 else 'interception_hold_end' if k==30 else None) if kind=='hold' and h.get('throw_result')=='interception' else kind if kind in ('title','pull','run','final') else 'goal_replay' if kind=='replay' and h['goal'] else 'turnover' if kind=='play' and is_turn and t>.8 else None
+                if kind=='run' and h.get('phase')=='rundown' and t>.5:snap='rundown'
                 if snap and snap not in snapshots and (kind not in ('pull','replay') or t>.5):
                     snapshots[snap]={'frame':frame_index,'seconds':frame_index/30}
                 frame_index+=1
