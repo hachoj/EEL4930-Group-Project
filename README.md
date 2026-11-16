@@ -125,12 +125,21 @@ uv run python render_full.py outputs_dev/v7/Calculator_vs_Scripted_games.json ou
 ```
 
 Media defaults to `outputs_dev/v7/media/`. `--figures --video` makes both.
-Indices are zero-based across the supplied files. Highlights retain complete
-possessions with at most N side turns, including every score/drop/interception
-in those possessions; longer possessions are omitted. Playback is shortened
-to at most 84 seconds; lower N if more than 1,008 turns qualify. Full replays
-retain every turn at half a second per turn. Coordinate rotation is announced
-in the header; blue/red always refer to team 0/team 1.
+Indices are zero-based across the supplied files. Video is a fixed-camera,
+1920×1080, 30 fps broadcast with both endzones, stable team colors and jersey
+identities, eased motion, throw arcs, disc trails, score bug, title/legend and
+final cards. Turnovers reverse attack direction without rotating the camera.
+After points, teams switch ends: the new receiver attacks the previous scorer's
+direction. Visual pulls do not alter simulation starts. Slow replays follow goals
+and interceptions. Encoding is H.264/yuv420p, faststart, with metadata stripped.
+
+`--highlights N` shows every goal/turnover, approaching each finish with up to
+min(N,4) side turns; routine stretches are skipped. Playback is budgeted below
+90 seconds for ordinary games to 10, including pulls and replays. Full mode
+retains every side turn at 0.4 seconds plus cards, pulls and slow replays.
+Decoded title/pull/turnover/goal-replay/final PNG extracts and a timing JSON are
+written alongside each MP4. Use `--out outputs_dev/v7/media/broadcast` to keep
+broadcast exports separate from older media.
 
 Histories omit tactic names. Baseline modes are reconstructed without a solver:
 Scripted's deterministic rules, Calculator's first matching joint action.
