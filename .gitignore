@@ -1,0 +1,7 @@
+.venv/
+.uv-cache/
+__pycache__/
+outputs/.mpl/
+outputs/cache/
+outputs_dev/
+.pytest_cache/

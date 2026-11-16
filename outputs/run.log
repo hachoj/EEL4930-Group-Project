@@ -1,0 +1,115 @@
+{'states_per_side': 15552, 'states': 31106, 'samples_per_state': 2, 'build_seconds': 2.5675262910081074, 'solve_seconds': 0.17819291702471673, 'seconds': 2.745719790982548, 'horizon': 30, 'positive_30': [15550, 15547], 'almost_sure_30': [0, 0], 'convergence': 'exact 30 finite-horizon Bellman backups'}
+[
+  {
+    "offense": "Calculator",
+    "defense": "Calculator",
+    "n": 3,
+    "win_rate": 0.0,
+    "win_ci": [
+      0.0,
+      0.5615060804490177
+    ],
+    "turnover_rate": 1.0,
+    "turnover_ci": [
+      0.43849391955098227,
+      1.0
+    ],
+    "turns_to_score": null,
+    "turns_to_score_ci": null,
+    "abstraction_gap_ci": [
+      -0.3450239242376334,
+      0.2164821562113843
+    ],
+    "mistake_rate": 0.14482758620689656,
+    "mistake_ci": [
+      0.034482758620689655,
+      0.20000000000000004
+    ],
+    "abstraction_gap": 0.2164821562113843
+  },
+  {
+    "offense": "Calculator",
+    "defense": "Scripted",
+    "n": 3,
+    "win_rate": 0.0,
+    "win_ci": [
+      0.0,
+      0.5615060804490177
+    ],
+    "turnover_rate": 1.0,
+    "turnover_ci": [
+      0.43849391955098227,
+      1.0
+    ],
+    "turns_to_score": null,
+    "turns_to_score_ci": null,
+    "abstraction_gap_ci": [
+      -0.3450239242376334,
+      0.2164821562113843
+    ],
+    "mistake_rate": 0.1496947496947497,
+    "mistake_ci": [
+      0.09523809523809523,
+      0.20000000000000004
+    ],
+    "abstraction_gap": 0.2164821562113843
+  },
+  {
+    "offense": "Scripted",
+    "defense": "Calculator",
+    "n": 3,
+    "win_rate": 0.6666666666666666,
+    "win_ci": [
+      0.2076549551264879,
+      0.9385096847238394
+    ],
+    "turnover_rate": 0.3333333333333333,
+    "turnover_ci": [
+      0.0614903152761605,
+      0.7923450448735121
+    ],
+    "turns_to_score": 9.0,
+    "turns_to_score_ci": [
+      7.0,
+      11.0
+    ],
+    "abstraction_gap_ci": [
+      -0.7220275285124551,
+      0.008827201084896402
+    ],
+    "mistake_rate": 0.07792207792207792,
+    "mistake_ci": [
+      0.0,
+      0.14285714285714285
+    ],
+    "abstraction_gap": -0.4501845104552823
+  },
+  {
+    "offense": "Scripted",
+    "defense": "Scripted",
+    "n": 3,
+    "win_rate": 0.0,
+    "win_ci": [
+      0.0,
+      0.5615060804490177
+    ],
+    "turnover_rate": 0.0,
+    "turnover_ci": [
+      0.0,
+      0.5615060804490177
+    ],
+    "turns_to_score": null,
+    "turns_to_score_ci": null,
+    "abstraction_gap_ci": [
+      -0.3450239242376334,
+      0.2164821562113843
+    ],
+    "mistake_rate": 0.13333333333333333,
+    "mistake_ci": [
+      0.13333333333333333,
+      0.13333333333333333
+    ],
+    "abstraction_gap": 0.2164821562113843
+  }
+]
+Matplotlib is building the font cache; this may take a moment.

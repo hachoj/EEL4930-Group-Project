@@ -1,0 +1,149 @@
+{
+  "solver": {
+    "states_per_side": 30375,
+    "states": 60752,
+    "samples_per_state": 30,
+    "build_seconds": 96.76030558301136,
+    "solve_seconds": 3.07028237497434,
+    "seconds": 99.83058866701322,
+    "horizon": 30,
+    "positive_30": [
+      30375,
+      30375
+    ],
+    "almost_sure_30": [
+      0,
+      0
+    ],
+    "convergence": "exact 30 finite-horizon Bellman backups"
+  },
+  "run": {
+    "model": "haiku",
+    "llm_enabled": false,
+    "n": 30,
+    "start_depth": 12,
+    "wall_seconds": 102.73814787500305
+  },
+  "results": [
+    {
+      "offense": "Calculator",
+      "defense": "Calculator",
+      "n": 30,
+      "win_rate": 0.7666666666666667,
+      "win_ci": [
+        0.5907132766967574,
+        0.8820776078949878
+      ],
+      "turnover_rate": 0.23333333333333334,
+      "turnover_ci": [
+        0.11792239210501232,
+        0.40928672330324267
+      ],
+      "turns_to_score": 10.391304347826088,
+      "turns_to_score_ci": [
+        8.565217391304348,
+        13.173913043478262
+      ],
+      "abstraction_gap_ci": [
+        -0.12760198338514417,
+        0.16376234781308618
+      ],
+      "mistake_rate": 0.0034482758620689655,
+      "mistake_ci": [
+        0.0,
+        0.006896551724137932
+      ],
+      "abstraction_gap": -0.012191042156823095
+    },
+    {
+      "offense": "Calculator",
+      "defense": "Scripted",
+      "n": 30,
+      "win_rate": 0.43333333333333335,
+      "win_ci": [
+        0.2737723743061511,
+        0.6080299045459127
+      ],
+      "turnover_rate": 0.5666666666666667,
+      "turnover_ci": [
+        0.3919700954540873,
+        0.7262276256938489
+      ],
+      "turns_to_score": 29.0,
+      "turns_to_score_ci": [
+        29.0,
+        29.0
+      ],
+      "abstraction_gap_ci": [
+        0.14644571996393096,
+        0.48070325020369253
+      ],
+      "mistake_rate": 0.03448275862068965,
+      "mistake_ci": [
+        0.03448275862068965,
+        0.03448275862068965
+      ],
+      "abstraction_gap": 0.3211422911765103
+    },
+    {
+      "offense": "Scripted",
+      "defense": "Calculator",
+      "n": 30,
+      "win_rate": 0.23333333333333334,
+      "win_ci": [
+        0.11792239210501232,
+        0.40928672330324267
+      ],
+      "turnover_rate": 0.36666666666666664,
+      "turnover_ci": [
+        0.21873702204017678,
+        0.5448675356639506
+      ],
+      "turns_to_score": 13.0,
+      "turns_to_score_ci": [
+        13.0,
+        13.0
+      ],
+      "abstraction_gap_ci": [
+        0.34518890120660095,
+        0.6365532324048313
+      ],
+      "mistake_rate": 0.5358974358974359,
+      "mistake_ci": [
+        0.41614957264957264,
+        0.6647905982905983
+      ],
+      "abstraction_gap": 0.5211422911765102
+    },
+    {
+      "offense": "Scripted",
+      "defense": "Scripted",
+      "n": 30,
+      "win_rate": 0.3333333333333333,
+      "win_ci": [
+        0.19230295526846194,
+        0.5122027418616973
+      ],
+      "turnover_rate": 0.6666666666666666,
+      "turnover_ci": [
+        0.48779725813830266,
+        0.807697044731538
+      ],
+      "turns_to_score": 12.2,
+      "turns_to_score_ci": [
+        11.4,
+        13.0
+      ],
+      "abstraction_gap_ci": [
+        0.24227288264814628,
+        0.5621726692413817
+      ],
+      "mistake_rate": 0.5817160617160617,
+      "mistake_ci": [
+        0.47736968586968603,
+        0.6967655122655122
+      ],
+      "abstraction_gap": 0.4211422911765103
+    }
+  ]
+}

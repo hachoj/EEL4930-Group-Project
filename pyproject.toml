@@ -1,0 +1,10 @@
+[project]
+name = "ultimate-formal"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pillow",
+    "scipy>=1.18.1",
+]
