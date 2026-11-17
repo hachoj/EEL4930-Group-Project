@@ -6,9 +6,6 @@
 \usepackage{xcolor}
 \newcommand{\TODO}[1]{\textcolor{red}{#1}}
 
-% Bullet-point skeleton: each section lists what to say, with our real numbers.
-% Rewrite each list as prose in your own words.
-
 \begin{document}
 
 \title{Solved, Designed or Generated? Comparing Coaching Policies, from Abstraction-Based Synthesis to LLMs, in 3v3 Ultimate Frisbee}
@@ -26,22 +23,15 @@ lew@ufl.edu}}
 \maketitle
 
 \begin{abstract}
-\begin{itemize}
-\item Turn-based, stochastic 3v3 Ultimate game; too large to solve exactly ($\sim10^{13}$ concrete positions).
-\item We compare policy types in one shared game: Calculator (solves an abstraction exactly, plays it in the real game), Dominator (a hand-designed expert playbook from a real 3-person offense), LLM (Claude reads the full state as text), Scripted baseline.
-\item Catch odds fitted to 84,099 real 2025 UFA throws~\cite{ufa}; defensive pressure calibrated to UFA point statistics.
-\item Question: how do these policies rank against each other, and when does a provably optimal plan for a blurred model beat expert design or unconstrained reasoning over the exact state?
-\end{itemize}
+Ultimate Frisbee is a 7v7 team sport, typically played on a grass field, in which a team scores by catching a disc in the opposing endzone. Because the player holding the disc cannot take steps, teammates must move the disc downfield purely by passing. We model team strategy as a two-player, zero-sum, turn-based stochastic game in which the offense initiates each exchange. Since the real game has an uncountable number of positions for 14 players, we simplify it to 3v3 Ultimate on a $10\times20$ grid, which still has about $10^{13}$ positions, too many to solve exactly. Catch probabilities are fitted to 84,099 throws from the 2025 UFA season~\cite{ufa}, and defensive pressure is calibrated to UFA point statistics. We compare how different team strategy policies perform against each other: a human-designed strategy called the Dominator set, a simple scripted strategy, a Calculator strategy that is formally solved on an abstraction of the game, and two Claude models that dictate their own policy from the full game state. The comparison shows when a provably optimal plan for a coarse model beats expert design or unconstrained reasoning over the exact state.
 \end{abstract}
 
 \section{Introduction and Motivation}
-\begin{itemize}
-\item Core formal-methods move: system too big $\rightarrow$ build a smaller model, solve it with guarantees, carry the strategy back. The guarantee holds only on the model.
-\item Team sports make the gap concrete: six players, a disc, uncertain throws.
-\item Other ways to get a policy make different trade-offs: an expert playbook encodes human knowledge as readable rules (interpretable, no guarantees); an LLM sees the exact state, with no abstraction and no guarantees.
-\item Our game is built so no policy is perfect: the Calculator is exact on a blurry game; the playbook is only as good as its designer's reads; the LLM sees the real game but may play badly.
-\item Why it matters: tells us when abstraction-based synthesis is worth more than expert design or general reasoning over the full state.
-\end{itemize}
+A core move in formal methods is to replace a system too large to analyze with a smaller model, solve that model with guarantees, and carry the resulting strategy back to the real system. The guarantee, however, holds only on the model; how much of it survives depends on what the abstraction forgets. Team sports make this gap concrete: even a small game of Ultimate has six players, a disc and uncertain throws, far too many positions to solve directly.
+
+Abstraction-based synthesis is only one way to obtain a policy. An expert playbook encodes human knowledge as readable rules: it is interpretable but comes with no guarantees. A large language model (LLM) takes the opposite approach to the abstraction: it sees the exact state, but it has no model and no guarantees, and it may simply play badly. Our game is built so that no policy is perfect: the Calculator is exact on a blurred game, the playbook is only as good as its designer's reads, and the LLM sees the real game but must reason about it unaided.
+
+Comparing these policies under identical rules tells us when abstraction-based synthesis is worth more than expert design or general reasoning over the full state, and where each approach breaks down.
 
 \section{Problem Statement}
 We model 3v3 Ultimate as a turn-based game on a $10\times20$ grid of 5-yard squares, a $50\times100$-yard field. Rows 17--19 form the endzone being attacked. Each team has three identical players, and on every change of possession the field is rotated $180^\circ$, so the offense always attacks upward.
@@ -79,7 +69,7 @@ All policies play the same concrete game through one interface: given the positi
 \textbf{Play.} In the concrete game the Calculator scores every legal action (300 on offense, 1,372 on defense) by combining the exact one-step catch odds of the concrete position with the solved value of the abstract state the action leads to, and plays the best. Its first step is therefore exact and only its look-ahead is abstract.
 
 \subsection{Dominator: expert playbook}
-\TODO{Dominator is a hand-designed offense based on a real three-person set. The dump sets up behind the holder at $45^\circ$ on the force side, and the third player sets up upfield and slightly to the break side. Each decision is a short, priority-ordered read: the holder throws upfield if the upfield player's defender is sagging, or breaks the mark if it is flat; otherwise the holder throws to the dump. The dump cuts upline or swings behind the holder, and a $90^\circ$ give-and-go cut restores the base shape. Separate reads apply when the disc is trapped on the force sideline or sits on the break sideline. Every move traces back to a named read, which makes the policy interpretable by design, the opposite of the Calculator's value table. [Trican: confirm the reads and state which defense Dominator plays.]}
+Dominator is a hand-designed offense based on a real three-person set. The dump sets up behind the holder at $45^\circ$ on the force side, and the third player sets up upfield and slightly to the break side. Each decision is a short, priority-ordered read: the holder throws upfield if the upfield player's defender is sagging, or breaks the mark if it is flat; otherwise the holder throws to the dump. The dump cuts upline or swings behind the holder, and a $90^\circ$ give-and-go cut by the previous thrower restores the base shape, so roles rotate instead of players running back to fixed spots. Separate reads apply when the disc is trapped on the force sideline, where the offense takes a centering pass into space or a deep negative dump, and when it sits on the break sideline. Dominator is an offensive system, so on defense it uses the scripted man-to-man rules. Every move traces back to a named read, which makes the policy interpretable by design, the opposite of the Calculator's value table.
 
 \subsection{LLM coach}
 The LLM coach is Claude, called through the \texttt{claude -p} command-line interface~\cite{claude}. In the current prompt it is told the rules once, including the catch-probability curve in words with its 10-, 40- and 60-yard values. On each turn it then receives only the game state, drawn as an ASCII sketch of the field, together with the score, the number of holds left and the list of legal moves. The prompt gives no catch odds for individual options, no rankings and no advice, so the LLM must judge the risk of each throw from the state itself. On offense it chooses a move for each receiver and whether and to whom to throw; on defense it moves each defender freely (stay or one of 8 directions) rather than choosing among the Calculator's modes. It answers in JSON with named fields; an invalid answer is retried once, after which the scripted move is used. Our preliminary runs used an earlier prompt that listed the catch, drop and interception odds of every option.
@@ -92,7 +82,7 @@ The scripted coach is a fixed rule set. On offense, receivers cut forward into o
 \subsection{Calibration and experiments}
 \textbf{Calibration.} We set the pressure knob $P$ by a grid search over $P\in\{0.1,0.2,0.35,0.5\}$, playing 20 Calculator self-play games to 10 at each value and minimizing the squared relative error against 2025 UFA statistics. At $P=0.1$ the simulation gives a 93.0\% completion rate (UFA 94.1\%), the receiving team scores 55.1\% of points (53.5\%), there are 0.58 turnovers per point (0.82), and 5.8 passes per goal (8.3).
 
-\textbf{Matchups and metrics.} The policies play a round robin of games to 10, with Calculator against Scripted as a floor check and LLM against Calculator and Dominator against Calculator as the headline pairs. For each matchup we report wins, points per possession (our main metric), turnovers per possession, completion rate, rows gained per throw and the share of backward throws.
+\textbf{Matchups and metrics.} The policies play a tournament. In pool play every entrant plays every other over many possessions, and each policy is scored separately on offense and on defense, giving an offense-by-defense table of points scored per possession with error bars. The top entrants then play longer games to 10 in a bracket, which we use for the conclusion and for replay videos. The Calculator against the LLM is the headline matchup. Alongside points per possession we report wins, turnovers per possession, completion rate, rows gained per throw and the share of backward throws.
 
 \textbf{LLM memory experiment.} Our main LLM experiment pits Claude Haiku, at high reasoning effort and with the same prompt throughout, against the Calculator for 10 games to 10 under each of the three memory conditions above.
 
@@ -110,14 +100,18 @@ The scripted coach is a fixed rule set. On offense, receivers cut forward into o
 \item Is comparing several policy types (and LLM memory conditions) in scope, or should we focus on Calculator vs one opponent?
 \end{enumerate}
 
+\section{Questions for the Instructor}
+\begin{enumerate}
+\item Is an abstraction with sampled transitions acceptable, or would you like a bound on the abstraction error?
+\item Should we add a formal check of the abstract strategy, for example with a probabilistic model checker such as PRISM-games?
+\item Is a tournament of several policy types (including LLM memory conditions) in scope, or should we focus on the Calculator against a single opponent?
+\end{enumerate}
+
 \begin{thebibliography}{9}
 \bibitem{ufa} Ultimate Frisbee Association, ``UFA statistics API,'' 2025. [Online]. Available: \url{https://www.backend.ufastats.com/api/v1}
 \bibitem{shapley1953} L.~S. Shapley, ``Stochastic games,'' \emph{Proc. Natl. Acad. Sci.}, vol.~39, no.~10, pp.~1095--1100, 1953.
 \bibitem{condon1992} A.~Condon, ``The complexity of stochastic games,'' \emph{Information and Computation}, vol.~96, no.~2, pp.~203--224, 1992.
 \bibitem{baier2008} C.~Baier and J.-P.~Katoen, \emph{Principles of Model Checking}. MIT Press, 2008.
-\bibitem{clarke2000} E.~Clarke, O.~Grumberg, S.~Jha, Y.~Lu, and H.~Veith, ``Counterexample-guided abstraction refinement,'' in \emph{Proc. CAV}, 2000, pp.~154--169.
-\bibitem{alshiekh2018} M.~Alshiekh, R.~Bloem, R.~Ehlers, B.~K\"onighofer, S.~Niekum, and U.~Topcu, ``Safe reinforcement learning via shielding,'' in \emph{Proc. AAAI}, 2018.
-\bibitem{dealfaro2007} L.~de~Alfaro, T.~A.~Henzinger, and O.~Kupferman, ``Concurrent reachability games,'' \emph{Theoretical Computer Science}, vol.~386, no.~3, pp.~188--217, 2007.
 \bibitem{claude} Anthropic, ``Claude Code documentation,'' 2025. [Online]. Available: \url{https://docs.anthropic.com/en/docs/claude-code}
 \end{thebibliography}
 
