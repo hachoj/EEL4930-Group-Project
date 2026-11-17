@@ -36,21 +36,23 @@
 \end{itemize}
 
 \section{Problem Statement}
-\begin{itemize}
-\item \textbf{Field:} $10\times20$ grid of 5-yard squares ($50\times100$ yd); endzone rows 17--19; three identical players per team; field rotates $180^\circ$ on a change of possession so the offense always attacks up.
-\item \textbf{Turns} alternate like chess. Offense: holder cannot move (pivot); both receivers move one square (8-neighborhood) or stay; then hold, throw to B, or throw to C. Must throw by the 3rd decision (stands in for the stall count; no stall turnovers). Defense: each defender moves one square; man-to-man marks, switches allowed. No shared squares.
-\item \textbf{Force flick:} after each catch the holder's marker is placed on the holder's left (break side).
-\item \textbf{Catch model} (three multiplied layers):
-  \begin{itemize}
-  \item Distance curve $p_{\text{UFA}}(d)$ fitted to 84,099 UFA 2025 throws: 10 yd $\approx$97\%, 40 yd $\approx$83\%, 60 yd $\approx$58\%.
-  \item Receiver pressure from each defender within 3 squares: $h_j = 0.6P\max(0,1-r_j/3)\bigl(0.25+0.75\tfrac{1+\cos\theta_j}{2}\bigr)$; a defender in front hurts $4\times$ more than one behind.
-  \item Lane pressure: small extra risk for defenders on the throwing line.
-  \item One pressure knob $P=0.1$ (see calibration).
-  \end{itemize}
-\item \textbf{Turnovers:} failure from the distance layer = drop (opponent picks up at the receiver); failure from pressure = interception (picks up at that defender).
-\item \textbf{Points and games:} a catch in rows 17--19 scores; the scorer pulls, receivers pick up at rows 2--3, defenders cover 3 squares/beat for $\sim$4 beats (scripted). Games to 10; first receiver alternates.
-\item \textbf{Formal question:} the game is a two-player zero-sum turn-based stochastic game~\cite{shapley1953}. Does a strategy optimal for a finite abstraction beat an LLM over the concrete state, and how well does the abstract value predict real play?
-\end{itemize}
+We model 3v3 Ultimate as a turn-based game on a $10\times20$ grid of 5-yard squares, a $50\times100$-yard field. Rows 17--19 form the endzone being attacked. Each team has three identical players, and on every change of possession the field is rotated $180^\circ$, so the offense always attacks upward.
+
+\textbf{Turns.} The two teams alternate moves, as in chess. On an offensive turn the disc holder may not move (it pivots), each of the two receivers either stays or moves one square to any of its eight neighbors, and the holder then holds the disc or throws it to one of the receivers. The holder must throw by its third decision; this stands in for the stall count, so a stall never causes a turnover. On a defensive turn each defender moves at most one square. Defense is man-to-man, but defenders may switch marks. No two players may share a square.
+
+\textbf{Force.} After every catch the holder's marker is placed on the holder's left, sealing the break side and forcing flicks.
+
+\textbf{Catch model.} The probability that a throw is caught is the product of three factors. The first is a distance curve $p_{\text{UFA}}(d)$ fitted to 84,099 throws from the 2025 UFA season~\cite{ufa}: about 97\% at 10 yards, 83\% at 40 yards and 58\% at 60 yards. The second is pressure at the receiver: each defender $j$ within three squares reduces the catch probability by the factor $1-h_j$, where
+\begin{equation}
+h_j = 0.6\,P\,\max\!\left(0,\,1-\frac{r_j}{3}\right)\left(0.25+0.75\,\frac{1+\cos\theta_j}{2}\right),
+\end{equation}
+$r_j$ is the defender's distance from the receiver and $\theta_j$ is the angle at the receiver between the defender and the thrower. A defender directly in front of the receiver is therefore four times as disruptive as one directly behind. The third factor adds a small risk for each defender standing on the line of the throw. A single knob $P$ scales all defensive pressure; we set $P=0.1$ by calibrating against UFA statistics (Section~III).
+
+\textbf{Turnovers.} If a throw fails because of the distance factor, it is a drop and the defense picks up the disc at the receiver's square. If it fails because of pressure, it is an interception and the defense picks up at the responsible defender's square.
+
+\textbf{Points and games.} A catch in rows 17--19 scores a point. The scoring team then pulls: the receiving team picks up the disc on rows 2--3 while the covering defenders run downfield three squares per beat for about four beats under a scripted rule. A game is played to 10 points, and the team that receives first alternates between games.
+
+\textbf{Formal question.} The resulting game is a two-player, zero-sum, turn-based stochastic game~\cite{shapley1953}. Its concrete state space (about $10^{13}$ positions) is too large to solve exactly. We ask whether a strategy that is provably optimal for a finite abstraction of this game beats an LLM that reasons directly over the concrete state, and how well the value of the abstract game predicts the points actually scored in real play.
 
 \section{Proposed Approach}
 \subsection{Calculator: abstraction and solution}
