@@ -3,13 +3,15 @@
 \usepackage{graphicx}
 \usepackage{cite}
 \usepackage{url}
+\usepackage{xcolor}
+\newcommand{\TODO}[1]{\textcolor{red}{#1}}
 
 % Bullet-point skeleton: each section lists what to say, with our real numbers.
 % Rewrite each list as prose in your own words.
 
 \begin{document}
 
-\title{Solved Playbook or Language Model? Abstraction-Based Strategy Synthesis versus an LLM Coach in 3v3 Ultimate Frisbee}
+\title{Solved, Designed or Generated? Comparing Coaching Policies, from Abstraction-Based Synthesis to LLMs, in 3v3 Ultimate Frisbee}
 
 \author{\IEEEauthorblockN{TEAM MEMBER 1, TEAM MEMBER 2, TEAM MEMBER 3}
 \IEEEauthorblockA{EEL4930, University of Florida\\
@@ -20,9 +22,9 @@
 \begin{abstract}
 \begin{itemize}
 \item Turn-based, stochastic 3v3 Ultimate game; too large to solve exactly ($\sim10^{13}$ concrete positions).
-\item Three coaches: Calculator (solves an abstraction exactly, plays it in the real game), LLM (Claude reads the full state as text), Scripted baseline.
+\item We compare policy types in one shared game: Calculator (solves an abstraction exactly, plays it in the real game), Dominator (a hand-designed expert playbook from a real 3-person offense), LLM (Claude reads the full state as text), Scripted baseline.
 \item Catch odds fitted to 84,099 real 2025 UFA throws~\cite{ufa}; defensive pressure calibrated to UFA point statistics.
-\item Question: when does a provably optimal plan for a blurred model beat unconstrained reasoning over the exact state?
+\item Question: how do these policies rank against each other, and when does a provably optimal plan for a blurred model beat expert design or unconstrained reasoning over the exact state?
 \end{itemize}
 \end{abstract}
 
@@ -30,9 +32,9 @@
 \begin{itemize}
 \item Core formal-methods move: system too big $\rightarrow$ build a smaller model, solve it with guarantees, carry the strategy back. The guarantee holds only on the model.
 \item Team sports make the gap concrete: six players, a disc, uncertain throws.
-\item LLMs are the opposite philosophy: they see the exact state, with no abstraction and no guarantees.
-\item Our game is built so neither side is perfect: the Calculator is exact on a blurry game; the LLM sees the real game but may play badly.
-\item Why it matters: tells us when abstraction-based synthesis is worth more than general reasoning over the full state.
+\item Other ways to get a policy make different trade-offs: an expert playbook encodes human knowledge as readable rules (interpretable, no guarantees); an LLM sees the exact state, with no abstraction and no guarantees.
+\item Our game is built so no policy is perfect: the Calculator is exact on a blurry game; the playbook is only as good as its designer's reads; the LLM sees the real game but may play badly.
+\item Why it matters: tells us when abstraction-based synthesis is worth more than expert design or general reasoning over the full state.
 \end{itemize}
 
 \section{Problem Statement}
@@ -52,7 +54,7 @@ $r_j$ is the defender's distance from the receiver and $\theta_j$ is the angle a
 
 \textbf{Points and games.} A catch in rows 17--19 scores a point. The scoring team then pulls: the receiving team picks up the disc on rows 2--3 while the covering defenders run downfield three squares per beat for about four beats under a scripted rule. A game is played to 10 points, and the team that receives first alternates between games.
 
-\textbf{Formal question.} The resulting game is a two-player, zero-sum, turn-based stochastic game~\cite{shapley1953}. Its concrete state space (about $10^{13}$ positions) is too large to solve exactly. We ask whether a strategy that is provably optimal for a finite abstraction of this game beats an LLM that reasons directly over the concrete state, and how well the value of the abstract game predicts the points actually scored in real play.
+\textbf{Formal question.} The resulting game is a two-player, zero-sum, turn-based stochastic game~\cite{shapley1953}. Its concrete state space (about $10^{13}$ positions) is too large to solve exactly, so every practical coach is a policy that acts on some reduced view of the state. We compare policies that reduce it in different ways: a strategy synthesized to be optimal on a finite abstraction of the game (the Calculator), a hand-designed expert playbook (Dominator), an LLM that reasons directly over the concrete state, and a scripted baseline. We ask how these policies rank in head-to-head play under identical rules, and, for the synthesized strategy, how well the value of the abstract game predicts the points actually scored in the concrete game.
 
 \section{Proposed Approach}
 \subsection{Calculator: abstraction and solution}
@@ -74,6 +76,15 @@ $r_j$ is the defender's distance from the receiver and $\theta_j$ is the angle a
 \item Planned (v2): clearer prompt with an ASCII field sketch, a plain-English rules briefing, rounded odds and turnover consequences; no move recommendations.
 \end{itemize}
 
+\subsection{Dominator: expert playbook \TODO{(Trican; in progress)}}
+\begin{itemize}
+\item Hand-designed offense from a real 3-person set: the dump sets up behind the holder at $45^\circ$ on the force side, the third player upfield and slightly break side.
+\item Each decision is a short priority-ordered read: upfield throw if the upfield mark sags (or a break if the holder's mark is flat), else the dump; the dump cuts upline or swings behind, then a $90^\circ$ give-and-go restores the base shape.
+\item Separate reads when the disc is on the force (trap) or break sideline.
+\item Interpretable by design: every move traces to a named read, the opposite of the Calculator's value table.
+\item \TODO{Defense used with Dominator (scripted?); first prototype lost to Scripted, read order being tuned.}
+\end{itemize}
+
 \subsection{Scripted baseline}
 \begin{itemize}
 \item Offense: receivers cut to open space going forward; throw to the best forward target if $p_{\text{catch}}\ge0.65$, else hold; on the forced turn throw to the best target.
@@ -83,7 +94,7 @@ $r_j$ is the defender's distance from the receiver and $\theta_j$ is the angle a
 \subsection{Calibration and experiments}
 \begin{itemize}
 \item \textbf{Calibration:} grid over $P\in\{0.1,0.2,0.35,0.5\}$, Calculator self-play, 20 games to 10 each; minimize squared relative error vs UFA 2025 targets. At $P=0.1$: completion 93.0\% (UFA 94.1\%), receiving team scores 55.1\% (53.5\%), 0.58 turnovers/point (0.82), 5.8 passes/goal (8.3).
-\item \textbf{Matchups:} LLM vs Calculator; Calculator vs Scripted as a floor check.
+\item \textbf{Matchups:} round robin of the policies, with Calculator vs Scripted as a floor check; LLM vs Calculator and Dominator vs Calculator are the headline pairs.
 \item \textbf{Metrics:} wins, points per possession (headline), turnovers per possession, completion rate, rows gained per throw, backward-throw share.
 \item \textbf{Planned final experiment} (the main result): Haiku at high reasoning effort vs Calculator, same v2 prompt everywhere, 10 games to 10 per condition, three memory conditions:
   \begin{itemize}
@@ -102,7 +113,7 @@ $r_j$ is the defender's distance from the receiver and $\theta_j$ is the angle a
   \item Haiku vs Calculator (10 games to 10): Calculator won all 10; points/possession 0.12 vs 0.79. Haiku threw safely but gained $\sim$0.3 rows/throw with 39\% backward throws (Calculator 2.3 rows/throw).
   \item Opus learning run (6 games to 5, one session): Opus won 4--2 (26--18 points), 0.68 vs 0.49 points/possession, but its scoring fell from 1.0 to $\sim$0.44 per possession over the run.
   \end{itemize}
-\item \textbf{Expectation:} a weak LLM loses to the abstraction; a strong one can exploit what the abstraction forgets (exact openness, mark identities).
+\item \textbf{Expectation:} a weak LLM loses to the abstraction; a strong one can exploit what the abstraction forgets (exact openness, mark identities). The expert playbook should beat Scripted and be the easiest to explain, but may be exploitable by a solved defense.
 \item \textbf{Planned experiment hypotheses} (Haiku, v2 prompt, 10 games each vs Calculator):
   \begin{itemize}
   \item The v2 prompt alone (fresh session per decision) raises Haiku's points/possession above the 0.12 baseline, isolating the prompt effect.
@@ -125,7 +136,7 @@ $r_j$ is the defender's distance from the receiver and $\theta_j$ is the angle a
 \begin{enumerate}
 \item Is an abstraction with sampled transitions acceptable, or do you want a bound on abstraction error?
 \item Should we add a formal check of the abstract strategy (e.g., a model checker such as PRISM-games)?
-\item Is comparing LLM memory conditions in scope, or should we focus on Calculator vs LLM only?
+\item Is comparing several policy types (and LLM memory conditions) in scope, or should we focus on Calculator vs one opponent?
 \end{enumerate}
 
 \begin{thebibliography}{9}
