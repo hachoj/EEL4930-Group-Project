@@ -93,13 +93,6 @@ The Scripted coach follows a fixed set of rules. On offense, the receivers cut f
 
 \textbf{Mitigation.} We will test Dominator set against the Scripted strategy as we build it, and adjust the order and thresholds of its reads until it reliably wins that matchup before it enters the main tournament. For the LLM, we will use a smaller, faster model for development and long runs, and report results game by game so trends are visible even with only a few games.
 
-\section{Questions for the Instructor}
-\begin{enumerate}
-\item Is it acceptable to estimate the abstract game's transitions by sampling, or would you like us to bound the abstraction error?
-\item Should we also formally check the Calculator's strategy, for example with a probabilistic model checker such as PRISM-games?
-\item Is a tournament with several policy types (and different LLM memory setups) in scope, or should we focus on the Calculator against a single opponent?
-\end{enumerate}
-
 \begin{thebibliography}{9}
 \bibitem{ufa} Ultimate Frisbee Association, ``UFA statistics API,'' 2025. [Online]. Available: \url{https://www.backend.ufastats.com/api/v1}
 \bibitem{shapley1953} L.~S. Shapley, ``Stochastic games,'' \emph{Proc. Natl. Acad. Sci.}, vol.~39, no.~10, pp.~1095--1100, 1953.
