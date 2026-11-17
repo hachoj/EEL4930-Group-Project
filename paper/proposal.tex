@@ -63,53 +63,38 @@ $r_j$ is the defender's distance from the receiver and $\theta_j$ is the angle a
 \textbf{Formal question.} The resulting game is a two-player, zero-sum, turn-based stochastic game~\cite{shapley1953}. Its concrete state space (about $10^{13}$ positions) is too large to solve exactly, so every practical coach is a policy that acts on some reduced view of the state. We compare policies that reduce it in different ways: a strategy synthesized to be optimal on a finite abstraction of the game (the Calculator), a hand-designed expert playbook (Dominator), an LLM that reasons directly over the concrete state, and a scripted baseline. We ask how these policies rank in head-to-head play under identical rules, and, for the synthesized strategy, how well the value of the abstract game predicts the points actually scored in the concrete game.
 
 \section{Proposed Approach}
+All policies play the same concrete game through one interface: given the positions, marks and hold count, a coach returns every player's next square and, on offense, whether and to whom to throw. We describe the Calculator in full, since it is the only policy built from a formal model, and the others more briefly.
+
 \subsection{Calculator: abstraction and solution}
-\begin{itemize}
-\item \textbf{Abstract state:} zone of each offensive player (3 lanes $\times$ 5 depths, endzone its own depth = 15 zones); per receiver a coverage label (nearest defender close-in-front / close-behind within 3 squares / far); hold counter; side to move. $15^3\times3^2=30{,}375$ base states $\times$ 3 hold values $\times$ 2 sides $=182{,}250$ states.
-\item Deliberately forgets exact defender squares and who marks whom: this blind spot is the thesis.
-\item \textbf{Actions:} offense 300 = 10 intents per receiver (stay, 8 directions, get-open) squared $\times$ \{hold, throw B, throw C\}. Defense 1,372 = 7 modes per defender (tight-front, tight-behind, trail, poach-lane, poach-deep, double-B, double-C) cubed $\times$ 4 switch options.
-\item \textbf{Transitions:} sample concrete positions per abstract state (4 samples), simulate every action in the real model, record abstract successors $\rightarrow$ sparse transition matrices.
-\item \textbf{Terminal values:} score $=+1-\gamma V_{\text{opp}}(\text{pull})$; turnover $=-\gamma V_{\text{opp}}(\text{pickup})$, so field position after a mistake matters.
-\item \textbf{Solve:} max--min value iteration~\cite{condon1992,baier2008}, $\gamma=0.97$, tolerance $10^{-7}$; 416 iterations, $\sim$4.5 min solve plus $\sim$1.5 min build.
-\item \textbf{Play:} in the real game, evaluate all 300 (or 1,372) actions with exact one-step catch odds plus the solved value of the landing abstract state; take the best. Exact now, blurry later.
-\end{itemize}
+\textbf{Abstract state.} The Calculator replaces each concrete position with a coarse description. The field is divided into 3 lanes and 5 depths, with the endzone as its own depth, giving 15 zones, and each offensive player is recorded only by its zone. Each receiver also carries a coverage label describing its nearest defender: close and in front, close and behind (within three squares), or far. Adding the hold counter and the side to move gives $15^3\times3^2=30{,}375$ base states, times 3 hold values and 2 sides, for $182{,}250$ abstract states. The abstraction deliberately forgets the exact defender squares and which defender marks whom; this blind spot is what the comparison with the other policies probes.
+
+\textbf{Actions.} An offensive action gives each receiver one of 10 intents (stay, one of 8 directions, or get open) and the holder one of three choices (hold, throw to B, throw to C), for $10^2\times3=300$ actions. A defensive action gives each defender one of 7 modes (tight in front, tight behind, trail, poach the lane, poach deep, double B, double C) together with one of 4 switch options, for $7^3\times4=1{,}372$ actions.
+
+\textbf{Transitions.} The abstract transition probabilities are estimated by simulation rather than derived by hand. For each abstract state we sample 4 concrete positions consistent with it, apply every action in the concrete model, and record the abstract states that result. This yields sparse transition matrices over the abstract game.
+
+\textbf{Terminal values.} A point is worth $+1-\gamma V_{\text{opp}}(\text{pull})$ to the scoring team, where $V_{\text{opp}}(\text{pull})$ is the opponent's value of receiving the next pull; a turnover is worth $-\gamma V_{\text{opp}}(\text{pickup})$, so where the opponent picks up the disc matters as well as the fact of the turnover.
+
+\textbf{Solution.} We solve the abstract game by max--min value iteration~\cite{condon1992,baier2008} with discount $\gamma=0.97$ and tolerance $10^{-7}$. It converges in 416 iterations; building the model takes about 1.5 minutes and solving it about 4.5 minutes.
+
+\textbf{Play.} In the concrete game the Calculator scores every legal action (300 on offense, 1,372 on defense) by combining the exact one-step catch odds of the concrete position with the solved value of the abstract state the action leads to, and plays the best. Its first step is therefore exact and only its look-ahead is abstract.
+
+\subsection{Dominator: expert playbook}
+\TODO{Dominator is a hand-designed offense based on a real three-person set. The dump sets up behind the holder at $45^\circ$ on the force side, and the third player sets up upfield and slightly to the break side. Each decision is a short, priority-ordered read: the holder throws upfield if the upfield player's defender is sagging, or breaks the mark if it is flat; otherwise the holder throws to the dump. The dump cuts upline or swings behind the holder, and a $90^\circ$ give-and-go cut restores the base shape. Separate reads apply when the disc is trapped on the force sideline or sits on the break sideline. Every move traces back to a named read, which makes the policy interpretable by design, the opposite of the Calculator's value table. [Trican: confirm the reads and state which defense Dominator plays.]}
 
 \subsection{LLM coach}
-\begin{itemize}
-\item Claude via the \texttt{claude -p} CLI~\cite{claude}; each decision gets the state as readable text: positions, marks, every option's resulting square and catch / drop / interception odds, hold legality.
-\item Answers named-field JSON; one retry, then the scripted move as fallback (never triggered in the Opus run).
-\item Learning variant: one persistent session, feedback after every point, up to 5 written lessons after every game.
-\item Planned (v2): clearer prompt with an ASCII field sketch, a plain-English rules briefing, rounded odds and turnover consequences; no move recommendations.
-\end{itemize}
+The LLM coach is Claude, called through the \texttt{claude -p} command-line interface~\cite{claude}. In the current prompt it is told the rules once, including the catch-probability curve in words with its 10-, 40- and 60-yard values. On each turn it then receives only the game state, drawn as an ASCII sketch of the field, together with the score, the number of holds left and the list of legal moves. The prompt gives no catch odds for individual options, no rankings and no advice, so the LLM must judge the risk of each throw from the state itself. On offense it chooses a move for each receiver and whether and to whom to throw; on defense it moves each defender freely (stay or one of 8 directions) rather than choosing among the Calculator's modes. It answers in JSON with named fields; an invalid answer is retried once, after which the scripted move is used. Our preliminary runs used an earlier prompt that listed the catch, drop and interception odds of every option.
 
-\subsection{Dominator: expert playbook \TODO{(Trican; in progress)}}
-\begin{itemize}
-\item Hand-designed offense from a real 3-person set: the dump sets up behind the holder at $45^\circ$ on the force side, the third player upfield and slightly break side.
-\item Each decision is a short priority-ordered read: upfield throw if the upfield mark sags (or a break if the holder's mark is flat), else the dump; the dump cuts upline or swings behind, then a $90^\circ$ give-and-go restores the base shape.
-\item Separate reads when the disc is on the force (trap) or break sideline.
-\item Interpretable by design: every move traces to a named read, the opposite of the Calculator's value table.
-\item \TODO{Defense used with Dominator (scripted?); first prototype lost to Scripted, read order being tuned.}
-\end{itemize}
+The LLM can be given three kinds of memory: a fresh session for every decision, one session per game in which it is told the result of each point, or one session across all games in which it additionally writes up to five lessons after each game.
 
 \subsection{Scripted baseline}
-\begin{itemize}
-\item Offense: receivers cut to open space going forward; throw to the best forward target if $p_{\text{catch}}\ge0.65$, else hold; on the forced turn throw to the best target.
-\item Defense: tight-front on your mark; poach when your mark is $>7$ squares from the disc (deep if near the endzone); the marker doubles when receivers bunch near the holder.
-\end{itemize}
+The scripted coach is a fixed rule set. On offense, receivers cut forward into open space; the holder throws to the best forward target if its catch probability is at least 0.65 and holds otherwise, throwing to the best available target when a throw is forced. On defense, each defender plays tight in front of its mark, poaches when its mark is more than 7 squares from the disc (deep when near the endzone), and the marker doubles when the receivers bunch near the holder.
 
 \subsection{Calibration and experiments}
-\begin{itemize}
-\item \textbf{Calibration:} grid over $P\in\{0.1,0.2,0.35,0.5\}$, Calculator self-play, 20 games to 10 each; minimize squared relative error vs UFA 2025 targets. At $P=0.1$: completion 93.0\% (UFA 94.1\%), receiving team scores 55.1\% (53.5\%), 0.58 turnovers/point (0.82), 5.8 passes/goal (8.3).
-\item \textbf{Matchups:} round robin of the policies, with Calculator vs Scripted as a floor check; LLM vs Calculator and Dominator vs Calculator are the headline pairs.
-\item \textbf{Metrics:} wins, points per possession (headline), turnovers per possession, completion rate, rows gained per throw, backward-throw share.
-\item \textbf{Planned final experiment} (the main result): Haiku at high reasoning effort vs Calculator, same v2 prompt everywhere, 10 games to 10 per condition, three memory conditions:
-  \begin{itemize}
-  \item \emph{Zero-shot:} fresh session every decision (no memory).
-  \item \emph{Per game:} one session per game, told the result of each point.
-  \item \emph{Across games:} one session for all 10 games, point results plus up to 5 written lessons after each game.
-  \end{itemize}
-  The first two run in parallel; the third runs sequentially.
-\end{itemize}
+\textbf{Calibration.} We set the pressure knob $P$ by a grid search over $P\in\{0.1,0.2,0.35,0.5\}$, playing 20 Calculator self-play games to 10 at each value and minimizing the squared relative error against 2025 UFA statistics. At $P=0.1$ the simulation gives a 93.0\% completion rate (UFA 94.1\%), the receiving team scores 55.1\% of points (53.5\%), there are 0.58 turnovers per point (0.82), and 5.8 passes per goal (8.3).
+
+\textbf{Matchups and metrics.} The policies play a round robin of games to 10, with Calculator against Scripted as a floor check and LLM against Calculator and Dominator against Calculator as the headline pairs. For each matchup we report wins, points per possession (our main metric), turnovers per possession, completion rate, rows gained per throw and the share of backward throws.
+
+\textbf{LLM memory experiment.} Our main LLM experiment pits Claude Haiku, at high reasoning effort and with the same prompt throughout, against the Calculator for 10 games to 10 under each of the three memory conditions above.
 
 \section{Expected Outcomes}
 \begin{itemize}
