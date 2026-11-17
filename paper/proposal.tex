@@ -97,31 +97,11 @@ The scripted coach is a fixed rule set. On offense, receivers cut forward into o
 \textbf{LLM memory experiment.} Our main LLM experiment pits Claude Haiku, at high reasoning effort and with the same prompt throughout, against the Calculator for 10 games to 10 under each of the three memory conditions above.
 
 \section{Expected Outcomes}
-\begin{itemize}
-\item \textbf{Preliminary results:}
-  \begin{itemize}
-  \item Calculator vs Scripted: the receiving team scores 55\% of points with the Calculator vs 18\% with Scripted.
-  \item Haiku vs Calculator (10 games to 10): Calculator won all 10; points/possession 0.12 vs 0.79. Haiku threw safely but gained $\sim$0.3 rows/throw with 39\% backward throws (Calculator 2.3 rows/throw).
-  \item Opus learning run (6 games to 5, one session): Opus won 4--2 (26--18 points), 0.68 vs 0.49 points/possession, but its scoring fell from 1.0 to $\sim$0.44 per possession over the run.
-  \end{itemize}
-\item \textbf{Expectation:} a weak LLM loses to the abstraction; a strong one can exploit what the abstraction forgets (exact openness, mark identities). The expert playbook should beat Scripted and be the easiest to explain, but may be exploitable by a solved defense.
-\item \textbf{Planned experiment hypotheses} (Haiku, v2 prompt, 10 games each vs Calculator):
-  \begin{itemize}
-  \item The v2 prompt alone (fresh session per decision) raises Haiku's points/possession above the 0.12 baseline, isolating the prompt effect.
-  \item One session per game lets Haiku adapt within a game (e.g., to the Calculator's defensive habits); expect fewer turnovers late in games.
-  \item One session across all 10 games tests whether lessons carry over; the Opus run suggests accumulated lessons can hurt, so we test whether this repeats or reverses.
-  \item Compare all three on wins, points/possession, turnovers/possession, rows gained/throw and backward-throw share, plus per-game curves for the two session conditions.
-  \end{itemize}
-\item \textbf{Challenges and mitigation:}
-  \begin{itemize}
-  \item Calibration gaps (too few passes/goal; 34\% vs 15\% of goals right after a turnover): reported as limitations, not tuned away.
-  \item LLM performance depends on the prompt: one v2 prompt shared across all conditions.
-  \item Small samples (6--10 games), LLM cost and latency: report per-game numbers, treat trends as descriptive.
-  \item Abstraction error: compare the abstract value with realized points per possession; refine zones where the gap is largest (CEGAR-style~\cite{clarke2000}).
-  \item Break-throw penalty unidentifiable from UFA data: multiplier fixed at 1.0.
-  \end{itemize}
-\item \textbf{Future work:} shield the LLM with the Calculator's safe region~\cite{alshiekh2018}; simultaneous moves as a concurrent reachability game~\cite{dealfaro2007}.
-\end{itemize}
+\textbf{Expected results.} We expect a strong LLM, given memory across a long run of games, to improve as it plays and eventually beat every other policy on average, since it is the only coach that sees the exact state and can adapt to its opponent. We expect the Calculator and Dominator to finish roughly even: one is optimal for a coarse model of the game, the other encodes expert knowledge of a real offense, and each covers the other's weakness. We expect the scripted baseline to finish last, but not by a wide margin, since its simple rules already capture the basics of moving the disc forward safely.
+
+\textbf{Challenges.} The main challenge is making Dominator competitive. A playbook is only as good as its reads, and translating a real three-person set into the grid game, where throws go to players rather than space and moves happen one square per turn, may lose much of what makes it work. A second challenge is cost: each LLM decision is a model call, so long runs of games are slow, which limits how many games we can play and makes small differences between policies hard to separate.
+
+\textbf{Mitigation.} We will test Dominator against the scripted baseline as we build it and refine the order and thresholds of its reads until it reliably wins that matchup before entering the main comparison. For the LLM, we will use a smaller, faster model for development and long runs, and report per-game results so that trends are visible even with few games.
 
 \section{Questions for the Instructor}
 \begin{enumerate}
